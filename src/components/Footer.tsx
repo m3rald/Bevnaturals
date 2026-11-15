@@ -1,6 +1,7 @@
 import { Moon, Sun } from 'lucide-react';
 import { Link } from '../lib/router';
 import { useStore } from '../lib/cart-context';
+import { PRODUCT_IMAGES } from '../lib/product-images';
 import { storeConfig } from '../lib/store-config';
 
 export function Footer() {
@@ -12,14 +13,12 @@ export function Footer() {
         <div className="grid grid-cols-1 gap-10 md:grid-cols-4">
           <div className="md:col-span-2 space-y-3">
             <Link to="/" className="inline-flex items-center gap-2.5 font-display text-2xl font-semibold tracking-tight">
-              <span className="h-9 w-9 rounded-full overflow-hidden shrink-0 border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#14532D]">
-                <img
-                  src={storeConfig.logoSrc}
-                  alt="Bev Naturals emblem"
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full object-cover scale-[1.24]"
-                />
-              </span>
+              <img
+                src={PRODUCT_IMAGES.logo}
+                alt="Bev Naturals emblem"
+                referrerPolicy="no-referrer"
+                className="h-10 w-10 shrink-0 object-contain"
+              />
               <span>{storeConfig.brandName}</span>
             </Link>
             <p className="max-w-md text-sm leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">

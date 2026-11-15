@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Menu, ShoppingBag, X } from 'lucide-react';
 import { Link, useRouter } from '../lib/router';
 import { useStore } from '../lib/cart-context';
-import { storeConfig } from '../lib/store-config';
+import { PRODUCT_IMAGES } from '../lib/product-images';
 
 const NAV_LINKS = [
   { to: '/shop/adult', label: 'Adult' },
@@ -25,14 +25,12 @@ export function Header() {
           to="/"
           className="inline-flex items-center gap-2.5 font-display text-2xl font-semibold tracking-tight text-[#1C1410] dark:text-[#F3EBDF] whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B85C38]"
         >
-          <span className="h-9 w-9 rounded-full overflow-hidden shrink-0 border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#14532D]">
-            <img
-              src={storeConfig.logoSrc}
-              alt="Bev Naturals emblem"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover scale-[1.24]"
-            />
-          </span>
+          <img
+            src={PRODUCT_IMAGES.logo}
+            alt="Bev Naturals emblem"
+            referrerPolicy="no-referrer"
+            className="h-10 w-10 shrink-0 object-contain"
+          />
           <span>Bev Naturals</span>
         </Link>
 

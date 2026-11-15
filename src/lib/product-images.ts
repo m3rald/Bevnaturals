@@ -1,4 +1,5 @@
 import aboutImg from '../assets/images/about_botanical_craft_1794755731252.jpg';
+import bevLogoImg from '../assets/images/bev_naturals_logo.png';
 import antiItchMistEnhanced from '../assets/images/anti_itch_mist_enhanced_1794760519617.jpg';
 import herbsMixImg from '../assets/images/ayurvedic_herbs_mix_mockup_1794759044131.jpg';
 import bentoniteClayEnhanced from '../assets/images/bentonite_clay_enhanced_1794760523082.jpg';
@@ -22,6 +23,7 @@ import type { Product } from './types';
 
 export const PRODUCT_IMAGES = {
   about: aboutImg,
+  logo: bevLogoImg,
   herbsMix: herbsMixImg,
   tempColors: tempColorsImg,
   dermaRoller: dermaRollerEnhanced,
