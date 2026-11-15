@@ -1,0 +1,8 @@
+{
+  "name": "Bev Naturals Cosmetics",
+  "description": "Botanical hair treatment formulations for adults and children, crafted in Ibadan and shipped nationwide across Nigeria with Paystack and Opay checkout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

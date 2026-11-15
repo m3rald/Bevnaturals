@@ -1,0 +1,59 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --bev-paper: #F3EBDF;
+    --bev-paper-elevated: #FAF5EE;
+    --bev-ink: #1C1410;
+    --bev-ink-muted: #5C4E45;
+    --bev-clay: #B85C38;
+    --bev-leaf: #3D5344;
+    --bev-brass: #C6A36A;
+  }
+
+  .dark {
+    --bev-paper: #14100D;
+    --bev-paper-elevated: #1E1814;
+    --bev-ink: #F3EBDF;
+    --bev-ink-muted: #B8AA9B;
+    --bev-clay: #CA6E49;
+    --bev-leaf: #567560;
+    --bev-brass: #D4B47C;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-display {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-sans {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+}
+
+.font-mono-num {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,22 @@
+import { SHIPPING_REGIONS } from './shipping';
+
+export const storeConfig = {
+  brandName: 'Bev Naturals Cosmetics',
+  shortName: 'Bev Naturals',
+  logoSrc: '/assets/aistudio/IMG-20261025-WA0002_d0c27ecd.jpg',
+  email: 'adereb18@gmail.com',
+  location: 'Ibadan, Oyo State, Nigeria',
+  fulfilmentScope: 'Crafted in Ibadan · Shipped nationwide across Nigeria',
+  opay: {
+    enabled: false,
+    bankName: 'OPay',
+    accountName: 'Bev Naturals Cosmetics',
+    accountNumber: '6419555143',
+  },
+  paystack: {
+    enabled: true,
+    currency: 'NGN',
+  },
+} as const;
+
+export const NIGERIAN_STATES: string[] = SHIPPING_REGIONS.flatMap((region) => region.states);
