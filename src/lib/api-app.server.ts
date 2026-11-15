@@ -209,56 +209,49 @@ export function createApiApp(): express.Express {
       const secretKey = getPaystackSecretKey();
       const publicKey = getPaystackPublicKey();
 
-      if (secretKey) {
-        const baseUrl = getBaseUrl(req);
-        const callbackUrl = `${baseUrl}/order/${encodeURIComponent(order.orderNumber)}?verify=paystack`;
-
-        const psRes = await fetch('https://api.paystack.co/transaction/initialize', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${secretKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            email,
-            amount: finalPayableNgn * 100,
-            currency: 'NGN',
-            reference: paymentReference,
-            callback_url: callbackUrl,
-            metadata: {
-              orderNumber: order.orderNumber,
-              customerName: fullName,
-              state: shippingQuote.state,
-              shippingMethod: shippingQuote.method.label,
-              shippingFeeNgn: deliveryFeeNgn,
-              discountNgn: promo.discountNgn,
-            },
-          }),
+      if (!secretKey) {
+        res.status(503).json({
+          error:
+            'Paystack live secret key is not configured on the server. Add PAYSTACK_SECRET_KEY in environment settings.',
         });
+        return;
+      }
 
-        const psJson = (await psRes.json()) as {
-          status?: boolean;
-          message?: string;
-          data?: { authorization_url: string; access_code: string; reference: string };
-        };
+      const baseUrl = getBaseUrl(req);
+      const callbackUrl = `${baseUrl}/order/${encodeURIComponent(order.orderNumber)}?verify=paystack`;
 
-        if (!psRes.ok || !psJson.status || !psJson.data) {
-          res.status(502).json({
-            error: psJson.message || 'Unable to initialize Paystack transaction.',
-          });
-          return;
-        }
-
-        res.status(201).json({
-          order,
-          paystack: {
-            mode: 'live',
-            authorizationUrl: psJson.data.authorization_url,
-            accessCode: psJson.data.access_code,
-            reference: psJson.data.reference,
-            amountKobo: finalPayableNgn * 100,
-            publicKey,
+      const psRes = await fetch('https://api.paystack.co/transaction/initialize', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          amount: finalPayableNgn * 100,
+          currency: 'NGN',
+          reference: paymentReference,
+          callback_url: callbackUrl,
+          metadata: {
+            orderNumber: order.orderNumber,
+            customerName: fullName,
+            state: shippingQuote.state,
+            shippingMethod: shippingQuote.method.label,
+            shippingFeeNgn: deliveryFeeNgn,
+            discountNgn: promo.discountNgn,
           },
+        }),
+      });
+
+      const psJson = (await psRes.json()) as {
+        status?: boolean;
+        message?: string;
+        data?: { authorization_url: string; access_code: string; reference: string };
+      };
+
+      if (!psRes.ok || !psJson.status || !psJson.data) {
+        res.status(502).json({
+          error: psJson.message || 'Unable to initialize Paystack transaction.',
         });
         return;
       }
@@ -266,8 +259,10 @@ export function createApiApp(): express.Express {
       res.status(201).json({
         order,
         paystack: {
-          mode: 'sandbox',
-          reference: paymentReference,
+          mode: 'live',
+          authorizationUrl: psJson.data.authorization_url,
+          accessCode: psJson.data.access_code,
+          reference: psJson.data.reference,
           amountKobo: finalPayableNgn * 100,
           publicKey,
         },
@@ -300,62 +295,59 @@ export function createApiApp(): express.Express {
 
       const secretKey = getPaystackSecretKey();
 
-      if (secretKey) {
-        const psRes = await fetch(
-          `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-          {
-            headers: {
-              Authorization: `Bearer ${secretKey}`,
-            },
-          }
-        );
-        const psJson = (await psRes.json()) as {
-          status?: boolean;
-          message?: string;
-          data?: {
-            status?: string;
-            amount?: number;
-            channel?: string;
-            authorization?: { last4?: string; brand?: string };
-          };
+      if (!secretKey) {
+        res.status(503).json({
+          verified: false,
+          error: 'Paystack live secret key is not configured on the server.',
+        });
+        return;
+      }
+
+      const psRes = await fetch(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${secretKey}`,
+          },
+        }
+      );
+      const psJson = (await psRes.json()) as {
+        status?: boolean;
+        message?: string;
+        data?: {
+          status?: string;
+          amount?: number;
+          channel?: string;
+          authorization?: { last4?: string; brand?: string };
         };
+      };
 
-        if (!psRes.ok || !psJson.status || psJson.data?.status !== 'success') {
-          res.status(402).json({
-            verified: false,
-            error: psJson.message || 'Paystack transaction has not been completed.',
-          });
-          return;
-        }
-
-        const payableNgn = existing.totalNgn ?? existing.subtotalNgn;
-        const expectedKobo = payableNgn * 100;
-        if ((psJson.data.amount || 0) < expectedKobo) {
-          res.status(402).json({
-            verified: false,
-            error: 'Verified Paystack amount is less than order total.',
-          });
-          return;
-        }
-
-        const brand = psJson.data.authorization?.brand?.toUpperCase();
-        const last4 = psJson.data.authorization?.last4;
-        const channelLabel =
-          brand && last4
-            ? `Paystack (${brand} •••• ${last4})`
-            : `Paystack (${psJson.data.channel || 'Verified'})`;
-
-        const updated = await markOrderPaidByReference(reference, channelLabel);
-        res.json({ verified: true, order: updated });
+      if (!psRes.ok || !psJson.status || psJson.data?.status !== 'success') {
+        res.status(402).json({
+          verified: false,
+          error: psJson.message || 'Paystack transaction has not been completed.',
+        });
         return;
       }
 
-      if (!reference.startsWith('BN-PS-')) {
-        res.status(400).json({ verified: false, error: 'Invalid sandbox reference.' });
+      const payableNgn = existing.totalNgn ?? existing.subtotalNgn;
+      const expectedKobo = payableNgn * 100;
+      if ((psJson.data.amount || 0) < expectedKobo) {
+        res.status(402).json({
+          verified: false,
+          error: 'Verified Paystack amount is less than order total.',
+        });
         return;
       }
-      const channel = body.sandboxChannel?.trim() || 'Paystack Sandbox (Card •••• 4081)';
-      const updated = await markOrderPaidByReference(reference, channel);
+
+      const brand = psJson.data.authorization?.brand?.toUpperCase();
+      const last4 = psJson.data.authorization?.last4;
+      const channelLabel =
+        brand && last4
+          ? `Paystack (${brand} •••• ${last4})`
+          : `Paystack (${psJson.data.channel || 'Verified'})`;
+
+      const updated = await markOrderPaidByReference(reference, channelLabel);
       res.json({ verified: true, order: updated });
     } catch (err) {
       console.error('Paystack verification error:', err);

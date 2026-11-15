@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-const DEFAULT_STUDIO_PIN = 'IbadanBev';
+const DEFAULT_STUDIO_PIN = 'Ibadanbev';
 
 export function getStudioPin(): string {
   return process.env.STUDIO_PIN?.trim() || DEFAULT_STUDIO_PIN;

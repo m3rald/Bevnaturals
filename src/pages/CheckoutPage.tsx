@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { CreditCard, ShieldCheck, Truck } from 'lucide-react';
 import { findProductAndVariant, formatNgn } from '../lib/catalog';
 import { calculatePromoDiscount } from '../lib/promo';
@@ -11,9 +11,8 @@ import {
 } from '../lib/shipping';
 import { useStore } from '../lib/cart-context';
 import { Link, useRouter } from '../lib/router';
-import { PaystackSandboxModal } from '../components/PaystackSandboxModal';
 import { PromoCountdownCard, useLivePromoSnapshot } from '../components/PromoCountdownCard';
-import type { Order, PublicStoreConfig } from '../lib/types';
+import type { Order } from '../lib/types';
 
 declare global {
   interface Window {
@@ -37,8 +36,6 @@ export function CheckoutPage() {
   useLivePromoSnapshot();
   const promo = calculatePromoDiscount(subtotalNgn);
 
-  const [config, setConfig] = useState<PublicStoreConfig | null>(null);
-
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -52,20 +49,6 @@ export function CheckoutPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-
-  const [sandboxSession, setSandboxSession] = useState<{
-    order: Order;
-    reference: string;
-  } | null>(null);
-
-  useEffect(() => {
-    fetch('/api/config')
-      .then((res) => res.json())
-      .then((data: PublicStoreConfig) => setConfig(data))
-      .catch(() => {
-        // fallback gracefully
-      });
-  }, []);
 
   const activeRegion = useMemo(
     () => findRegionById(regionId) || SHIPPING_REGIONS[0],
@@ -112,7 +95,7 @@ export function CheckoutPage() {
   // Promo applies strictly to products; shipping fee is independent and paid in full
   const finalTotalNgn = promo.totalNgn + shippingFeeNgn;
 
-  if (items.length === 0 && !sandboxSession) {
+  if (items.length === 0) {
     return (
       <div className="mx-auto max-w-3xl px-4 sm:px-6 py-24 text-center space-y-5">
         <h1 className="font-display text-3xl font-semibold">Your bag is empty</h1>
@@ -129,22 +112,17 @@ export function CheckoutPage() {
     );
   }
 
-  const verifyPaystackAndRedirect = async (
-    reference: string,
-    orderNumber: string,
-    sandboxChannel?: string
-  ) => {
+  const verifyPaystackAndRedirect = async (reference: string, orderNumber: string) => {
     const res = await fetch('/api/paystack/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reference, sandboxChannel }),
+      body: JSON.stringify({ reference }),
     });
     const data = (await res.json()) as { verified?: boolean; error?: string };
     if (!res.ok || !data.verified) {
       throw new Error(data.error || 'Paystack payment could not be verified.');
     }
     clearBag();
-    setSandboxSession(null);
     navigate(`/order/${encodeURIComponent(orderNumber)}`);
   };
 
@@ -176,7 +154,7 @@ export function CheckoutPage() {
         error?: string;
         order?: Order;
         paystack?: {
-          mode: 'live' | 'sandbox';
+          mode: 'live';
           authorizationUrl?: string;
           reference: string;
           amountKobo: number;
@@ -194,39 +172,37 @@ export function CheckoutPage() {
         throw new Error('Paystack checkout session could not be initialized.');
       }
 
-      if (ps.mode === 'live') {
-        if (ps.publicKey && window.PaystackPop) {
-          const handler = window.PaystackPop.setup({
-            key: ps.publicKey,
-            email,
-            amount: ps.amountKobo,
-            currency: 'NGN',
-            ref: ps.reference,
-            callback: (response) => {
-              verifyPaystackAndRedirect(response.reference, createdOrder.orderNumber).catch((err) => {
-                setError(err instanceof Error ? err.message : 'Verification error');
-              });
-            },
-            onClose: () => {
+      if (ps.publicKey && window.PaystackPop) {
+        const handler = window.PaystackPop.setup({
+          key: ps.publicKey,
+          email,
+          amount: ps.amountKobo,
+          currency: 'NGN',
+          ref: ps.reference,
+          callback: (response) => {
+            verifyPaystackAndRedirect(response.reference, createdOrder.orderNumber).catch((err) => {
               setSubmitting(false);
-              setError(
-                `Paystack window closed. Your order ${createdOrder.orderNumber} is saved as awaiting payment.`
-              );
-            },
-          });
-          handler.openIframe();
-          return;
-        }
-
-        if (ps.authorizationUrl) {
-          clearBag();
-          window.location.href = ps.authorizationUrl;
-          return;
-        }
+              setError(err instanceof Error ? err.message : 'Verification error');
+            });
+          },
+          onClose: () => {
+            setSubmitting(false);
+            setError(
+              `Paystack window closed. Your order ${createdOrder.orderNumber} is saved as awaiting payment.`
+            );
+          },
+        });
+        handler.openIframe();
+        return;
       }
 
-      setSandboxSession({ order: createdOrder, reference: ps.reference });
-      setSubmitting(false);
+      if (ps.authorizationUrl) {
+        clearBag();
+        window.location.href = ps.authorizationUrl;
+        return;
+      }
+
+      throw new Error('Paystack live checkout URL was not returned.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Checkout failed.');
       setSubmitting(false);
@@ -461,7 +437,7 @@ export function CheckoutPage() {
                   <span>Paystack Checkout</span>
                 </span>
                 <span className="text-[11px] font-medium text-[#3D5344] dark:text-[#8FB49B]">
-                  {config?.paystack.mode === 'live' ? 'Live' : 'Test Mode'}
+                  Live
                 </span>
               </div>
               <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
@@ -553,29 +529,6 @@ export function CheckoutPage() {
           <PromoCountdownCard variant="compact" />
         </aside>
       </form>
-
-      {sandboxSession && (
-        <PaystackSandboxModal
-          open={true}
-          customerEmail={sandboxSession.order.customer.email}
-          orderNumber={sandboxSession.order.orderNumber}
-          reference={sandboxSession.reference}
-          amountNgn={sandboxSession.order.totalNgn ?? sandboxSession.order.subtotalNgn}
-          onSuccess={async (channelLabel) => {
-            await verifyPaystackAndRedirect(
-              sandboxSession.reference,
-              sandboxSession.order.orderNumber,
-              channelLabel
-            );
-          }}
-          onCancel={() => {
-            setSandboxSession(null);
-            setError(
-              `Paystack payment paused. Order ${sandboxSession.order.orderNumber} was recorded as awaiting payment.`
-            );
-          }}
-        />
-      )}
     </div>
   );
 }
