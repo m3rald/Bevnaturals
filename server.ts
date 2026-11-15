@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import { findProductAndVariant } from './src/lib/catalog.ts';
 import { PROMO_CONFIG, calculatePromoDiscount } from './src/lib/promo.ts';
 import { resolveShippingQuote } from './src/lib/shipping.ts';
@@ -23,7 +23,12 @@ import {
 import type { OrderLineItem, OrderStatus, PaymentMethod, PublicStoreConfig } from './src/lib/types.ts';
 
 const PORT = Number(process.env.PORT || 3000);
-const isProduction = process.env.NODE_ENV === 'production';
+const isDevCommand =
+  process.env.npm_lifecycle_event === 'dev' || process.env.NODE_ENV === 'development';
+const isProduction =
+  process.env.NODE_ENV === 'production' ||
+  process.env.npm_lifecycle_event === 'start' ||
+  (!isDevCommand && fsSync.existsSync(path.resolve(process.cwd(), 'dist', 'index.html')));
 
 function getPaystackSecretKey(): string {
   return process.env.PAYSTACK_SECRET_KEY?.trim() || '';
@@ -427,7 +432,12 @@ async function startServer() {
     res.json({ order: updated });
   });
 
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
+
   if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

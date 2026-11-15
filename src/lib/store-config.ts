@@ -1,4 +1,4 @@
-import { SHIPPING_REGIONS } from './shipping';
+import { SHIPPING_REGIONS } from './shipping.ts';
 
 export const storeConfig = {
   brandName: 'Bev Naturals Cosmetics',

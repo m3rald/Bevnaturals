@@ -1,4 +1,4 @@
-import type { ShippingMethodId, ShippingRegionId } from './shipping';
+import type { ShippingMethodId, ShippingRegionId } from './shipping.ts';
 
 export type ProductLine = 'adult' | 'kiddies' | 'combo';
 

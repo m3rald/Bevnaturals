@@ -1,25 +1,37 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Order, OrderLineItem, OrderStatus, PaymentMethod } from './types.ts';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+const PRIMARY_DATA_DIR = path.resolve(process.cwd(), 'data');
+const FALLBACK_DATA_DIR = path.join(os.tmpdir(), 'bev-naturals-data');
+let activeDataDir = PRIMARY_DATA_DIR;
 
 let writeChain: Promise<void> = Promise.resolve();
 
+function getOrdersFilePath(): string {
+  return path.join(activeDataDir, 'orders.json');
+}
+
 async function ensureStoreFile(): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
   try {
-    await fs.access(ORDERS_FILE);
+    await fs.mkdir(activeDataDir, { recursive: true });
+    await fs.access(getOrdersFilePath()).catch(async () => {
+      await fs.writeFile(getOrdersFilePath(), JSON.stringify([], null, 2), 'utf8');
+    });
   } catch {
-    await fs.writeFile(ORDERS_FILE, JSON.stringify([], null, 2), 'utf8');
+    activeDataDir = FALLBACK_DATA_DIR;
+    await fs.mkdir(activeDataDir, { recursive: true });
+    await fs.access(getOrdersFilePath()).catch(async () => {
+      await fs.writeFile(getOrdersFilePath(), JSON.stringify([], null, 2), 'utf8');
+    });
   }
 }
 
 export async function readOrders(): Promise<Order[]> {
   await ensureStoreFile();
-  const raw = await fs.readFile(ORDERS_FILE, 'utf8');
+  const raw = await fs.readFile(getOrdersFilePath(), 'utf8');
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as Order[]) : [];
@@ -30,9 +42,10 @@ export async function readOrders(): Promise<Order[]> {
 
 async function writeOrders(orders: Order[]): Promise<void> {
   await ensureStoreFile();
-  const tmpFile = `${ORDERS_FILE}.tmp`;
+  const ordersFile = getOrdersFilePath();
+  const tmpFile = `${ordersFile}.tmp`;
   await fs.writeFile(tmpFile, JSON.stringify(orders, null, 2), 'utf8');
-  await fs.rename(tmpFile, ORDERS_FILE);
+  await fs.rename(tmpFile, ordersFile);
 }
 
 function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
