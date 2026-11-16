@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CreditCard, ShieldCheck, Truck } from 'lucide-react';
+import { ExternalLink, CreditCard, ShieldCheck, Truck } from 'lucide-react';
 import { findProductAndVariant, formatNgn } from '../lib/catalog';
 import { calculatePromoDiscount } from '../lib/promo';
 import {
@@ -14,10 +14,21 @@ import { Link, useRouter } from '../lib/router';
 import { PromoCountdownCard, useLivePromoSnapshot } from '../components/PromoCountdownCard';
 import type { Order } from '../lib/types';
 
+interface PaystackV2Instance {
+  resumeTransaction: (
+    accessCode: string,
+    callbacks?: {
+      onSuccess?: (transaction?: { reference?: string }) => void;
+      onCancel?: () => void;
+      onError?: (error?: { message?: string }) => void;
+    }
+  ) => void;
+}
+
 declare global {
   interface Window {
-    PaystackPop?: {
-      setup: (options: {
+    PaystackPop?: (new () => PaystackV2Instance) & {
+      setup?: (options: {
         key: string;
         email: string;
         amount: number;
@@ -28,6 +39,28 @@ declare global {
       }) => { openIframe: () => void };
     };
   }
+}
+
+async function ensurePaystackV2Loaded(timeoutMs = 3500): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.PaystackPop === 'function') return true;
+
+  const existing = document.querySelector<HTMLScriptElement>(
+    'script[src*="js.paystack.co/v2/inline.js"]'
+  );
+  if (!existing) {
+    const script = document.createElement('script');
+    script.src = 'https://js.paystack.co/v2/inline.js';
+    script.async = true;
+    document.head.appendChild(script);
+  }
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (typeof window.PaystackPop === 'function') return true;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return typeof window.PaystackPop === 'function';
 }
 
 export function CheckoutPage() {
@@ -48,7 +81,13 @@ export function CheckoutPage() {
   const [note, setNote] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
+  const [verifyingPending, setVerifyingPending] = useState(false);
   const [error, setError] = useState('');
+  const [pendingCheckout, setPendingCheckout] = useState<{
+    orderNumber: string;
+    reference: string;
+    authorizationUrl: string;
+  } | null>(null);
 
   const activeRegion = useMemo(
     () => findRegionById(regionId) || SHIPPING_REGIONS[0],
@@ -135,6 +174,7 @@ export function CheckoutPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setPendingCheckout(null);
     setSubmitting(true);
 
     try {
@@ -162,6 +202,7 @@ export function CheckoutPage() {
         paystack?: {
           mode: 'live';
           authorizationUrl?: string;
+          accessCode?: string;
           reference: string;
           amountKobo: number;
           publicKey?: string;
@@ -178,33 +219,63 @@ export function CheckoutPage() {
         throw new Error('Paystack checkout session could not be initialized.');
       }
 
-      if (ps.publicKey && window.PaystackPop) {
-        const handler = window.PaystackPop.setup({
-          key: ps.publicKey,
-          email,
-          amount: ps.amountKobo,
-          currency: 'NGN',
-          ref: ps.reference,
-          callback: (response) => {
-            verifyPaystackAndRedirect(response.reference, createdOrder.orderNumber).catch((err) => {
-              setSubmitting(false);
-              setError(err instanceof Error ? err.message : 'Verification error');
+      const nextPending = {
+        orderNumber: createdOrder.orderNumber,
+        reference: ps.reference,
+        authorizationUrl: ps.authorizationUrl || '',
+      };
+
+      const v2Ready = Boolean(ps.accessCode) && (await ensurePaystackV2Loaded());
+
+      if (v2Ready && ps.accessCode && typeof window.PaystackPop === 'function') {
+        try {
+          const popup = new window.PaystackPop();
+          if (typeof popup.resumeTransaction === 'function') {
+            popup.resumeTransaction(ps.accessCode, {
+              onSuccess: (trx) => {
+                verifyPaystackAndRedirect(
+                  trx?.reference || ps.reference,
+                  createdOrder.orderNumber
+                ).catch((err) => {
+                  setSubmitting(false);
+                  setPendingCheckout(nextPending);
+                  setError(err instanceof Error ? err.message : 'Verification error');
+                });
+              },
+              onCancel: () => {
+                setSubmitting(false);
+                setPendingCheckout(nextPending);
+                setError(
+                  `Paystack window closed. Your order ${createdOrder.orderNumber} is saved — you can resume payment below.`
+                );
+              },
+              onError: (psErr) => {
+                if (ps.authorizationUrl && window.self === window.top) {
+                  window.location.href = ps.authorizationUrl;
+                  return;
+                }
+                setSubmitting(false);
+                setPendingCheckout(nextPending);
+                setError(
+                  psErr?.message ||
+                    'Paystack inline checkout could not open here. Use the direct Paystack button below.'
+                );
+              },
             });
-          },
-          onClose: () => {
-            setSubmitting(false);
-            setError(
-              `Paystack window closed. Your order ${createdOrder.orderNumber} is saved as awaiting payment.`
-            );
-          },
-        });
-        handler.openIframe();
-        return;
+            return;
+          }
+        } catch {
+          // Fall through cleanly to hosted Paystack checkout URL
+        }
       }
 
       if (ps.authorizationUrl) {
-        clearBag();
-        window.location.href = ps.authorizationUrl;
+        if (window.self === window.top) {
+          window.location.href = ps.authorizationUrl;
+          return;
+        }
+        setSubmitting(false);
+        setPendingCheckout(nextPending);
         return;
       }
 
@@ -212,6 +283,23 @@ export function CheckoutPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Checkout failed.');
       setSubmitting(false);
+    }
+  };
+
+  const handleManualVerifyPending = async () => {
+    if (!pendingCheckout) return;
+    setError('');
+    setVerifyingPending(true);
+    try {
+      await verifyPaystackAndRedirect(pendingCheckout.reference, pendingCheckout.orderNumber);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Payment not yet confirmed on Paystack. Complete payment first, then verify again.'
+      );
+    } finally {
+      setVerifyingPending(false);
     }
   };
 
@@ -232,6 +320,38 @@ export function CheckoutPage() {
           className="rounded-lg border border-[#B85C38]/40 bg-[#B85C38]/10 px-4 py-3 text-sm text-[#1C1410] dark:text-[#F3EBDF]"
         >
           {error}
+        </div>
+      )}
+
+      {pendingCheckout && pendingCheckout.authorizationUrl && (
+        <div className="rounded-xl border border-[#3D5344]/40 bg-[#3D5344]/8 dark:border-[#567560]/40 dark:bg-[#567560]/12 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+              Order <span className="font-mono-num">{pendingCheckout.orderNumber}</span> is ready for Paystack payment
+            </p>
+            <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
+              Open Paystack to complete payment, then click Verify Payment if you aren&apos;t redirected automatically.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <a
+              href={pendingCheckout.authorizationUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 min-h-[42px] px-4 py-2 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] text-xs font-semibold transition-colors"
+            >
+              <span>Open Paystack Checkout</span>
+              <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+            </a>
+            <button
+              type="button"
+              onClick={handleManualVerifyPending}
+              disabled={verifyingPending}
+              className="inline-flex items-center gap-1.5 min-h-[42px] px-4 py-2 rounded-lg border border-[#1C1410]/20 dark:border-[#F3EBDF]/20 text-xs font-semibold hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 disabled:opacity-60 cursor-pointer"
+            >
+              {verifyingPending ? 'Verifying…' : 'Verify Payment'}
+            </button>
+          </div>
         </div>
       )}
 

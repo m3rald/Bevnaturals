@@ -42,10 +42,19 @@ export async function readOrders(): Promise<Order[]> {
 
 async function writeOrders(orders: Order[]): Promise<void> {
   await ensureStoreFile();
-  const ordersFile = getOrdersFilePath();
-  const tmpFile = `${ordersFile}.tmp`;
-  await fs.writeFile(tmpFile, JSON.stringify(orders, null, 2), 'utf8');
-  await fs.rename(tmpFile, ordersFile);
+  try {
+    const ordersFile = getOrdersFilePath();
+    const tmpFile = `${ordersFile}.tmp`;
+    await fs.writeFile(tmpFile, JSON.stringify(orders, null, 2), 'utf8');
+    await fs.rename(tmpFile, ordersFile);
+  } catch {
+    activeDataDir = FALLBACK_DATA_DIR;
+    await fs.mkdir(activeDataDir, { recursive: true });
+    const fallbackFile = getOrdersFilePath();
+    const tmpFile = `${fallbackFile}.tmp`;
+    await fs.writeFile(tmpFile, JSON.stringify(orders, null, 2), 'utf8');
+    await fs.rename(tmpFile, fallbackFile);
+  }
 }
 
 function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
