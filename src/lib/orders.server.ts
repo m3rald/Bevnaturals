@@ -165,3 +165,50 @@ export async function updateOrderByNumber(
     return updated;
   });
 }
+
+export async function setOrderEmailFeedback(
+  orderNumber: string,
+  feedback: NonNullable<Order['emailFeedback']>
+): Promise<Order | null> {
+  return enqueueWrite(async () => {
+    const orders = await readOrders();
+    const normalized = orderNumber.trim().toUpperCase();
+    const idx = orders.findIndex((o) => o.orderNumber.toUpperCase() === normalized);
+    if (idx === -1) return null;
+    const current = orders[idx];
+    const updated: Order = {
+      ...current,
+      emailFeedback: feedback,
+      updatedAt: new Date().toISOString(),
+    };
+    orders[idx] = updated;
+    await writeOrders(orders);
+    return updated;
+  });
+}
+
+export async function upsertOrderFromPaystack(order: Order): Promise<Order> {
+  return enqueueWrite(async () => {
+    const orders = await readOrders();
+    const idx = orders.findIndex(
+      (o) =>
+        o.paymentReference === order.paymentReference ||
+        o.orderNumber.toUpperCase() === order.orderNumber.toUpperCase()
+    );
+    if (idx >= 0) {
+      const merged: Order = {
+        ...orders[idx],
+        status: order.status,
+        paymentChannel: order.paymentChannel || orders[idx].paymentChannel,
+        updatedAt: new Date().toISOString(),
+      };
+      orders[idx] = merged;
+      await writeOrders(orders);
+      return merged;
+    }
+    orders.unshift(order);
+    await writeOrders(orders);
+    return order;
+  });
+}
+

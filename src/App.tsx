@@ -13,7 +13,7 @@ import { OrderThankYouPage } from './pages/OrderThankYouPage';
 import { AboutPage } from './pages/AboutPage';
 import { ShippingPage } from './pages/ShippingPage';
 import { FaqPage } from './pages/FaqPage';
-import { AdminPage } from './pages/AdminPage';
+import { OrderLookupPage } from './pages/OrderLookupPage';
 
 function AppRoutes() {
   const { pathname } = useRouter();
@@ -37,7 +37,9 @@ function AppRoutes() {
   if (cleanPath === '/about') return <AboutPage />;
   if (cleanPath === '/shipping') return <ShippingPage />;
   if (cleanPath === '/faq') return <FaqPage />;
-  if (cleanPath === '/admin') return <AdminPage />;
+  if (cleanPath === '/order-lookup' || cleanPath === '/lookup' || cleanPath === '/admin') {
+    return <OrderLookupPage />;
+  }
 
   return <HomePage />;
 }

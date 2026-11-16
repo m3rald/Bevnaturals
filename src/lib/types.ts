@@ -1,4 +1,5 @@
 import type { ShippingMethodId, ShippingRegionId } from './shipping.ts';
+export type { ShippingMethodId, ShippingRegionId };
 
 export type ProductLine = 'adult' | 'kiddies' | 'combo';
 
@@ -86,6 +87,13 @@ export interface Order {
   totalNgn?: number;
   deliveryFeeNgn: number | null;
   studioNote: string;
+  source?: 'store' | 'paystack';
+  emailFeedback?: {
+    sentAt?: string;
+    customerNotified: boolean;
+    ownerNotified: boolean;
+    channel: 'smtp' | 'resend' | 'paystack_receipt';
+  };
 }
 
 export interface PublicStoreConfig {

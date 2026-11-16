@@ -65,10 +65,16 @@ export function CheckoutPage() {
     [activeRegion.id, state, methodId]
   );
 
-  const handleRegionChange = (nextRegionId: ShippingRegionId) => {
+  const handleRegionChange = (nextRegionId: ShippingRegionId, chosenState?: string) => {
     const nextRegion = findRegionById(nextRegionId) || SHIPPING_REGIONS[0];
-    const nextMethod = nextRegion.methods[0].id;
-    const nextState = nextRegion.states[0];
+    const nextMethod =
+      nextRegion.id === regionId && nextRegion.methods.some((m) => m.id === methodId)
+        ? methodId
+        : nextRegion.methods[0].id;
+    const nextState =
+      chosenState && nextRegion.states.includes(chosenState)
+        ? chosenState
+        : nextRegion.states[0];
     setRegionId(nextRegion.id);
     setState(nextState);
     setMethodId(nextMethod);
@@ -288,49 +294,69 @@ export function CheckoutPage() {
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <Truck className="w-4 h-4 text-[#B85C38]" aria-hidden="true" />
-                <h2 className="font-display text-2xl font-semibold">2. Nigerian Region & Shipping Fee</h2>
+                <h2 className="font-display text-2xl font-semibold">2. Pick Your State & Shipping</h2>
               </div>
               <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
-                Select your region and state. Shipping is added in full to your Paystack total (product promos apply only to products).
+                Every state is listed directly under its region below. Just tap your state to select it—your region and shipping rate will be set automatically.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label htmlFor="region" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Region
-                </label>
-                <select
-                  id="region"
-                  value={activeRegion.id}
-                  onChange={(e) => handleRegionChange(e.target.value as ShippingRegionId)}
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                >
-                  {SHIPPING_REGIONS.map((region) => (
-                    <option key={region.id} value={region.id}>
-                      {region.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="space-y-3">
+              {SHIPPING_REGIONS.map((region) => {
+                const isActiveRegion = activeRegion.id === region.id;
+                const minFee = Math.min(...region.methods.map((m) => m.feeNgn));
+                const maxFee = Math.max(...region.methods.map((m) => m.feeNgn));
+                const feeRangeLabel =
+                  minFee === maxFee
+                    ? formatNgn(minFee)
+                    : `${formatNgn(minFee)} – ${formatNgn(maxFee)}`;
 
-              <div className="space-y-1.5">
-                <label htmlFor="state" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  State ({activeRegion.states.length} in {activeRegion.shortLabel})
-                </label>
-                <select
-                  id="state"
-                  value={shippingQuote.state}
-                  onChange={(e) => setState(e.target.value)}
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                >
-                  {activeRegion.states.map((st) => (
-                    <option key={st} value={st}>
-                      {st}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                return (
+                  <div
+                    key={region.id}
+                    className={`rounded-xl border p-4 space-y-3 transition-colors ${
+                      isActiveRegion
+                        ? 'border-[#B85C38] bg-[#B85C38]/8 dark:bg-[#B85C38]/12'
+                        : 'border-[#1C1410]/12 dark:border-[#F3EBDF]/12 bg-[#F3EBDF]/70 dark:bg-[#14100D]/70'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRegionChange(region.id)}
+                        className="text-left text-sm font-semibold text-[#1C1410] dark:text-[#F3EBDF] hover:text-[#B85C38] transition-colors cursor-pointer"
+                      >
+                        {region.label}
+                      </button>
+                      <span className="font-mono-num text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                        {feeRangeLabel}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {region.states.map((st) => {
+                        const isSelectedState =
+                          isActiveRegion && shippingQuote.state === st;
+                        return (
+                          <button
+                            key={st}
+                            type="button"
+                            onClick={() => handleRegionChange(region.id, st)}
+                            aria-pressed={isSelectedState}
+                            className={`min-h-[38px] px-3 py-1.5 rounded-lg border text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                              isSelectedState
+                                ? 'border-[#B85C38] bg-[#B85C38] text-[#FAF5EE]'
+                                : 'border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#FAF5EE] dark:bg-[#1E1814] text-[#1C1410] dark:text-[#F3EBDF] hover:border-[#B85C38]/60'
+                            }`}
+                          >
+                            {st}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Shipping Method Options for Chosen Region */}

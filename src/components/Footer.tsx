@@ -1,14 +1,10 @@
-import { Moon, Sun } from 'lucide-react';
 import { Link } from '../lib/router';
-import { useStore } from '../lib/cart-context';
 import { PRODUCT_IMAGES } from '../lib/product-images';
 import { storeConfig } from '../lib/store-config';
 
 export function Footer() {
-  const { theme, toggleTheme } = useStore();
-
   return (
-    <footer className="border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1A1410] text-[#1C1410] dark:text-[#F3EBDF]">
+    <footer className="print:hidden border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1A1410] text-[#1C1410] dark:text-[#F3EBDF]">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 py-12">
         <div className="grid grid-cols-1 gap-10 md:grid-cols-4">
           <div className="md:col-span-2 space-y-3">
@@ -49,15 +45,15 @@ export function Footer() {
 
           <div className="space-y-3">
             <h3 className="text-xs font-semibold tracking-wider text-[#5C4E45] dark:text-[#B8AA9B]">
-              Information & Studio
+              Information & Orders
             </h3>
             <ul className="space-y-2 text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
               <li><Link to="/about" className="hover:text-[#B85C38] transition-colors">Our Story</Link></li>
               <li><Link to="/shipping" className="hover:text-[#B85C38] transition-colors">Shipping & Dispatch</Link></li>
               <li><Link to="/faq" className="hover:text-[#B85C38] transition-colors">Care & Payment FAQ</Link></li>
               <li>
-                <Link to="/admin" className="text-[#1C1410] dark:text-[#F3EBDF] hover:text-[#B85C38] transition-colors">
-                  Studio Order Ledger
+                <Link to="/order-lookup" className="text-[#1C1410] dark:text-[#F3EBDF] hover:text-[#B85C38] transition-colors">
+                  Order Lookup
                 </Link>
               </li>
             </ul>
@@ -68,24 +64,6 @@ export function Footer() {
           <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
             © {new Date().getFullYear()} {storeConfig.brandName}. Ibadan, Nigeria · Secured by Paystack.
           </p>
-
-          <button
-            type="button"
-            onClick={toggleTheme}
-            className="inline-flex items-center gap-2 min-h-[40px] px-3.5 py-2 text-xs font-medium rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-[#1C1410] dark:text-[#F3EBDF] hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            {theme === 'light' ? (
-              <>
-                <Moon className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Dark Appearance</span>
-              </>
-            ) : (
-              <>
-                <Sun className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Light Appearance</span>
-              </>
-            )}
-          </button>
         </div>
       </div>
     </footer>

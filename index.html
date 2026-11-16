@@ -1,8 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      try {
+        if (localStorage.getItem('bev_naturals_theme_v2') === 'light') {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+    </script>
     <title>Bev Naturals Cosmetics — Botanical Hair Treatment Store</title>
     <meta
       name="description"

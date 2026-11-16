@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Menu, ShoppingBag, X } from 'lucide-react';
+import { Menu, Moon, ShoppingBag, Sun, X } from 'lucide-react';
 import { Link, useRouter } from '../lib/router';
 import { useStore } from '../lib/cart-context';
 import { PRODUCT_IMAGES } from '../lib/product-images';
@@ -9,17 +9,17 @@ const NAV_LINKS = [
   { to: '/shop/kiddies', label: 'Kiddies' },
   { to: '/shop/combo', label: 'Combo' },
   { to: '/about', label: 'About' },
-  { to: '/admin', label: 'Studio' },
+  { to: '/order-lookup', label: 'Order Lookup' },
 ];
 
 export function Header() {
   const { pathname } = useRouter();
-  const { totalCount, openBag } = useStore();
+  const { totalCount, openBag, theme, toggleTheme } = useStore();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#F3EBDF]/95 dark:bg-[#14100D]/95 backdrop-blur-sm">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-8 px-4 sm:px-6 h-16">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-4 sm:px-6 h-16">
         {/* Zone 1: Brand logo emblem + wordmark */}
         <Link
           to="/"
@@ -55,8 +55,22 @@ export function Header() {
           })}
         </nav>
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Zone 3: Theme switcher + primary Bag action */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === 'light' ? 'Switch to dark appearance' : 'Switch to light appearance'}
+            title={theme === 'light' ? 'Dark appearance' : 'Light appearance'}
+            className="inline-flex items-center justify-center w-10 h-10 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-[#1C1410] dark:text-[#F3EBDF] hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 transition-colors cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B85C38]"
+          >
+            {theme === 'light' ? (
+              <Moon className="w-4 h-4" aria-hidden="true" />
+            ) : (
+              <Sun className="w-4 h-4" aria-hidden="true" />
+            )}
+          </button>
+
           <button
             type="button"
             onClick={openBag}

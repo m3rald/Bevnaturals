@@ -3,7 +3,7 @@ import { findProductAndVariant } from './catalog';
 import type { CartItem } from './types';
 
 const BAG_STORAGE_KEY = 'bev_naturals_bag_v1';
-const THEME_STORAGE_KEY = 'bev_naturals_theme_v1';
+const THEME_STORAGE_KEY = 'bev_naturals_theme_v2';
 
 interface StoreContextValue {
   items: CartItem[];
@@ -49,7 +49,7 @@ function loadInitialTheme(): 'light' | 'dark' {
   } catch {
     // ignore storage errors
   }
-  return 'light';
+  return 'dark';
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {

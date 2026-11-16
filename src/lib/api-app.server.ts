@@ -10,15 +10,23 @@ import {
   verifyStudioPin,
   verifyStudioSessionToken,
 } from './admin.server.ts';
+import { sendOrderReceiptEmails } from './mailer.server.ts';
+import {
+  fetchRecentSuccessfulPaystackOrders,
+  findPaystackOrderByQuery,
+  mapPaystackTxToOrder,
+} from './paystack-lookup.server.ts';
 import {
   createOrderRecord,
   findOrderByNumber,
   findOrderByPaymentReference,
   markOrderPaidByReference,
   readOrders,
+  setOrderEmailFeedback,
   updateOrderByNumber,
+  upsertOrderFromPaystack,
 } from './orders.server.ts';
-import type { OrderLineItem, OrderStatus, PaymentMethod, PublicStoreConfig } from './types.ts';
+import type { Order, OrderLineItem, OrderStatus, PaymentMethod, PublicStoreConfig } from './types.ts';
 
 function getPaystackSecretKey(): string {
   return process.env.PAYSTACK_SECRET_KEY?.trim() || '';
@@ -219,6 +227,9 @@ export function createApiApp(): express.Express {
 
       const baseUrl = getBaseUrl(req);
       const callbackUrl = `${baseUrl}/order/${encodeURIComponent(order.orderNumber)}?verify=paystack`;
+      const itemsSummary = verifiedItems
+        .map((item) => `${item.productName} (${item.sizeLabel}) x ${item.quantity}`)
+        .join(', ');
 
       const psRes = await fetch('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
@@ -235,10 +246,41 @@ export function createApiApp(): express.Express {
           metadata: {
             orderNumber: order.orderNumber,
             customerName: fullName,
+            customerEmail: email,
+            customerPhone: phone,
+            address,
+            city,
             state: shippingQuote.state,
+            regionId: shippingQuote.region.id,
+            regionLabel: shippingQuote.region.label,
+            methodId: shippingQuote.method.id,
             shippingMethod: shippingQuote.method.label,
             shippingFeeNgn: deliveryFeeNgn,
+            subtotalNgn,
             discountNgn: promo.discountNgn,
+            discountLabel: promo.discountLabel,
+            note,
+            itemsSummary,
+            items: verifiedItems,
+            custom_fields: [
+              { display_name: 'Order Number', variable_name: 'order_number', value: order.orderNumber },
+              { display_name: 'Customer Name', variable_name: 'customer_name', value: fullName },
+              { display_name: 'Phone Number', variable_name: 'customer_phone', value: phone },
+              {
+                display_name: 'Delivery Address',
+                variable_name: 'delivery_address',
+                value: `${address}, ${city}, ${shippingQuote.state}`,
+              },
+              {
+                display_name: 'Shipping Method',
+                variable_name: 'shipping_method',
+                value: `${shippingQuote.method.label} (₦${deliveryFeeNgn.toLocaleString('en-NG')})`,
+              },
+              { display_name: 'Items Ordered', variable_name: 'items', value: itemsSummary },
+              ...(note
+                ? [{ display_name: 'Delivery Note', variable_name: 'delivery_note', value: note }]
+                : []),
+            ],
           },
         }),
       });
@@ -283,12 +325,8 @@ export function createApiApp(): express.Express {
       }
 
       const existing = await findOrderByPaymentReference(reference);
-      if (!existing) {
-        res.status(404).json({ error: 'Order matching this Paystack reference was not found.' });
-        return;
-      }
 
-      if (existing.status !== 'awaiting_payment') {
+      if (existing && existing.status !== 'awaiting_payment') {
         res.json({ verified: true, order: existing });
         return;
       }
@@ -315,10 +353,21 @@ export function createApiApp(): express.Express {
         status?: boolean;
         message?: string;
         data?: {
+          id?: number;
+          reference?: string;
           status?: string;
           amount?: number;
           channel?: string;
+          paid_at?: string;
+          created_at?: string;
           authorization?: { last4?: string; brand?: string };
+          customer?: {
+            email?: string;
+            first_name?: string | null;
+            last_name?: string | null;
+            phone?: string | null;
+          };
+          metadata?: Record<string, unknown> | string | null;
         };
       };
 
@@ -330,14 +379,16 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const payableNgn = existing.totalNgn ?? existing.subtotalNgn;
-      const expectedKobo = payableNgn * 100;
-      if ((psJson.data.amount || 0) < expectedKobo) {
-        res.status(402).json({
-          verified: false,
-          error: 'Verified Paystack amount is less than order total.',
-        });
-        return;
+      if (existing) {
+        const payableNgn = existing.totalNgn ?? existing.subtotalNgn;
+        const expectedKobo = payableNgn * 100;
+        if ((psJson.data.amount || 0) < expectedKobo) {
+          res.status(402).json({
+            verified: false,
+            error: 'Verified Paystack amount is less than order total.',
+          });
+          return;
+        }
       }
 
       const brand = psJson.data.authorization?.brand?.toUpperCase();
@@ -347,7 +398,26 @@ export function createApiApp(): express.Express {
           ? `Paystack (${brand} •••• ${last4})`
           : `Paystack (${psJson.data.channel || 'Verified'})`;
 
-      const updated = await markOrderPaidByReference(reference, channelLabel);
+      let updated: Order | null = null;
+      if (existing) {
+        updated = await markOrderPaidByReference(reference, channelLabel);
+      } else {
+        const reconstructed = mapPaystackTxToOrder(psJson.data);
+        if (!reconstructed) {
+          res.status(404).json({ error: 'Order matching this Paystack reference was not found.' });
+          return;
+        }
+        updated = await upsertOrderFromPaystack(reconstructed);
+      }
+
+      if (updated && !updated.emailFeedback?.sentAt) {
+        const feedback = await sendOrderReceiptEmails(updated);
+        updated = (await setOrderEmailFeedback(updated.orderNumber, feedback)) || {
+          ...updated,
+          emailFeedback: feedback,
+        };
+      }
+
       res.json({ verified: true, order: updated });
     } catch (err) {
       console.error('Paystack verification error:', err);
@@ -356,12 +426,112 @@ export function createApiApp(): express.Express {
   });
 
   app.get('/api/orders/:orderNumber', async (req, res) => {
-    const order = await findOrderByNumber(req.params.orderNumber);
+    const query = req.params.orderNumber.trim();
+    let order = await findOrderByNumber(query);
+
+    if (!order || order.status === 'awaiting_payment') {
+      const secretKey = getPaystackSecretKey();
+      const psOrder = await findPaystackOrderByQuery(
+        secretKey,
+        order?.paymentReference || query
+      );
+      if (psOrder && psOrder.status === 'paid') {
+        order = await upsertOrderFromPaystack(psOrder);
+        if (!order.emailFeedback?.sentAt) {
+          const feedback = await sendOrderReceiptEmails(order);
+          order = (await setOrderEmailFeedback(order.orderNumber, feedback)) || {
+            ...order,
+            emailFeedback: feedback,
+          };
+        }
+      }
+    }
+
     if (!order) {
       res.status(404).json({ error: 'Order not found.' });
       return;
     }
     res.json({ order });
+  });
+
+  app.get('/api/orders-lookup', async (req, res) => {
+    try {
+      const rawQuery = String(req.query.q || '').trim();
+      if (!rawQuery) {
+        res.status(400).json({ error: 'Please paste an order number or Paystack reference.' });
+        return;
+      }
+
+      const upper = rawQuery.toUpperCase();
+      const localOrders = await readOrders();
+      let matched =
+        localOrders.find(
+          (o) =>
+            o.orderNumber.toUpperCase() === upper ||
+            o.paymentReference.toUpperCase() === upper
+        ) || null;
+
+      if (!matched || matched.status === 'awaiting_payment') {
+        const secretKey = getPaystackSecretKey();
+        const remote = await findPaystackOrderByQuery(
+          secretKey,
+          matched?.paymentReference || rawQuery
+        );
+        if (remote) {
+          matched =
+            remote.status === 'paid'
+              ? await upsertOrderFromPaystack(remote)
+              : remote;
+        }
+      }
+
+      if (!matched) {
+        res.status(404).json({
+          error: `No verified order found for "${rawQuery}". Check the order number (e.g. BN-1041-XXXX) or Paystack reference and try again.`,
+        });
+        return;
+      }
+
+      res.json({ order: matched });
+    } catch (err) {
+      console.error('Order lookup error:', err);
+      res.status(500).json({ error: 'Unable to look up order right now.' });
+    }
+  });
+
+  app.get('/api/orders-history', async (_req, res) => {
+    try {
+      const localOrders = await readOrders();
+      const secretKey = getPaystackSecretKey();
+      const paystackOrders = await fetchRecentSuccessfulPaystackOrders(secretKey, 100);
+
+      const byKey = new Map<string, Order>();
+
+      for (const ord of localOrders) {
+        if (ord.status !== 'awaiting_payment') {
+          byKey.set(ord.paymentReference || ord.orderNumber, ord);
+        }
+      }
+
+      for (const psOrd of paystackOrders) {
+        const existingByRef = byKey.get(psOrd.paymentReference);
+        const existingByNum = Array.from(byKey.values()).find(
+          (o) => o.orderNumber.toUpperCase() === psOrd.orderNumber.toUpperCase()
+        );
+        if (!existingByRef && !existingByNum) {
+          byKey.set(psOrd.paymentReference || psOrd.orderNumber, psOrd);
+        }
+      }
+
+      const merged = Array.from(byKey.values()).sort(
+        (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+      );
+
+      res.json({ orders: merged });
+    } catch (err) {
+      console.error('Order history error:', err);
+      res.status(500).json({ error: 'Unable to load previous purchases right now.' });
+    }
   });
 
   app.post('/api/admin/auth', (req, res) => {

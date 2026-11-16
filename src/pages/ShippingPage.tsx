@@ -36,10 +36,18 @@ export function ShippingPage() {
               ))}
             </ul>
 
-            <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
-              <span className="font-semibold text-[#1C1410] dark:text-[#F3EBDF]">States:</span>{' '}
-              {region.states.join(', ')}
-            </p>
+            <div className="space-y-2 pt-1">
+              <p className="text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                States in {region.shortLabel} ({region.states.length}):
+              </p>
+              <ul className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1.5 text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
+                {region.states.map((st) => (
+                  <li key={st} className="truncate">
+                    · {st}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </section>
         ))}
       </div>
