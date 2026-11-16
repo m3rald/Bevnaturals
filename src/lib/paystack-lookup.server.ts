@@ -293,3 +293,15 @@ export async function findPaystackOrderByQuery(
     ) || null
   );
 }
+
+export async function findPaystackOrderByOrderNumber(
+  secretKey: string,
+  rawOrderNumber: string
+): Promise<Order | null> {
+  const query = rawOrderNumber.trim();
+  if (!secretKey || !query) return null;
+  const upper = query.toUpperCase();
+
+  const recent = await fetchRecentSuccessfulPaystackOrders(secretKey, 100);
+  return recent.find((ord) => ord.orderNumber.toUpperCase() === upper) || null;
+}

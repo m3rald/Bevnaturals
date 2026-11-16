@@ -13,6 +13,7 @@ import {
 import { sendOrderReceiptEmails } from './mailer.server.ts';
 import {
   fetchRecentSuccessfulPaystackOrders,
+  findPaystackOrderByOrderNumber,
   findPaystackOrderByQuery,
   mapPaystackTxToOrder,
 } from './paystack-lookup.server.ts';
@@ -50,7 +51,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
   if (!verifyStudioSessionToken(token)) {
-    res.status(401).json({ error: 'Studio authorization required.' });
+    res.status(401).json({ error: 'PIN authorization required.' });
     return;
   }
   next();
@@ -454,29 +455,33 @@ export function createApiApp(): express.Express {
     res.json({ order });
   });
 
-  app.get('/api/orders-lookup', async (req, res) => {
+  app.post('/api/order-lookup/auth', (req, res) => {
+    const body = req.body as { pin?: string };
+    const pin = body.pin || '';
+    if (!verifyStudioPin(pin)) {
+      res.status(401).json({ error: 'Incorrect PIN code.' });
+      return;
+    }
+    const token = createStudioSessionToken();
+    res.json({ token });
+  });
+
+  app.get('/api/orders-lookup', requireAdmin, async (req, res) => {
     try {
       const rawQuery = String(req.query.q || '').trim();
       if (!rawQuery) {
-        res.status(400).json({ error: 'Please paste an order number or Paystack reference.' });
+        res.status(400).json({ error: 'Please paste an order number (e.g. BN-1041-XXXX).' });
         return;
       }
 
       const upper = rawQuery.toUpperCase();
       const localOrders = await readOrders();
       let matched =
-        localOrders.find(
-          (o) =>
-            o.orderNumber.toUpperCase() === upper ||
-            o.paymentReference.toUpperCase() === upper
-        ) || null;
+        localOrders.find((o) => o.orderNumber.toUpperCase() === upper) || null;
 
       if (!matched || matched.status === 'awaiting_payment') {
         const secretKey = getPaystackSecretKey();
-        const remote = await findPaystackOrderByQuery(
-          secretKey,
-          matched?.paymentReference || rawQuery
-        );
+        const remote = await findPaystackOrderByOrderNumber(secretKey, rawQuery);
         if (remote) {
           matched =
             remote.status === 'paid'
@@ -487,7 +492,7 @@ export function createApiApp(): express.Express {
 
       if (!matched) {
         res.status(404).json({
-          error: `No verified order found for "${rawQuery}". Check the order number (e.g. BN-1041-XXXX) or Paystack reference and try again.`,
+          error: `No verified order found for order number "${rawQuery}". Check the order number (e.g. BN-1041-XXXX) and try again.`,
         });
         return;
       }
@@ -499,7 +504,7 @@ export function createApiApp(): express.Express {
     }
   });
 
-  app.get('/api/orders-history', async (_req, res) => {
+  app.get('/api/orders-history', requireAdmin, async (_req, res) => {
     try {
       const localOrders = await readOrders();
       const secretKey = getPaystackSecretKey();
@@ -538,7 +543,7 @@ export function createApiApp(): express.Express {
     const body = req.body as { pin?: string };
     const pin = body.pin || '';
     if (!verifyStudioPin(pin)) {
-      res.status(401).json({ error: 'Incorrect Studio PIN.' });
+      res.status(401).json({ error: 'Incorrect PIN code.' });
       return;
     }
     const token = createStudioSessionToken();
