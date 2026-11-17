@@ -2,14 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   Banknote,
   Check,
   Clock,
   Copy,
   CreditCard,
   ExternalLink,
+  MapPin,
   ShieldCheck,
   Truck,
+  User,
 } from 'lucide-react';
 import { findProductAndVariant, formatNgn } from '../lib/catalog';
 import { calculatePromoDiscount } from '../lib/promo';
@@ -78,6 +81,8 @@ async function ensurePaystackV2Loaded(timeoutMs = 3500): Promise<boolean> {
 
 const MANUAL_WAIT_SECONDS = 60;
 
+type CheckoutStage = 'contact' | 'delivery' | 'payment';
+
 type ManualPhase =
   | 'idle'
   | 'deposit'
@@ -95,6 +100,9 @@ export function CheckoutPage() {
   // Paystack remains intact under the hood but is masked from plain sight unless explicitly enabled
   const usePaystackGateway =
     storeConfig.paystack.enabled || new URLSearchParams(search).get('gateway') === 'paystack';
+
+  // Link-to-link outer stage: 1. Contact -> 2. Delivery & Shipping -> 3. Payment
+  const [checkoutStage, setCheckoutStage] = useState<CheckoutStage>('contact');
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -193,6 +201,68 @@ export function CheckoutPage() {
   // Promo applies strictly to products; shipping fee is independent and paid in full
   const finalTotalNgn = promo.totalNgn + shippingFeeNgn;
 
+  const validateContactStage = (): boolean => {
+    const trimmedName = fullName.trim();
+    const trimmedEmail = email.trim();
+    const trimmedPhone = phone.trim();
+
+    if (trimmedName.length < 2) {
+      setError('Please enter your full name to continue.');
+      return false;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError('Please enter a valid email address for your order receipt.');
+      return false;
+    }
+    if (trimmedPhone.replace(/\D/g, '').length < 7) {
+      setError('Please enter a valid phone number so our rider or studio can reach you.');
+      return false;
+    }
+    return true;
+  };
+
+  const validateDeliveryStage = (): boolean => {
+    if (!address.trim()) {
+      setError('Please enter your delivery address or pick up landmark.');
+      return false;
+    }
+    if (!city.trim()) {
+      setError('Please enter your city or town.');
+      return false;
+    }
+    return true;
+  };
+
+  const goToDeliveryStage = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!validateContactStage()) return;
+    setCheckoutStage('delivery');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const goToPaymentStage = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!validateContactStage()) {
+      setCheckoutStage('contact');
+      return;
+    }
+    if (!validateDeliveryStage()) return;
+    setManualPhase('idle');
+    setWaitSecondsLeft(MANUAL_WAIT_SECONDS);
+    setPaymentMadeChecked(false);
+    setCheckoutStage('payment');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleEditStage = (target: 'contact' | 'delivery') => {
+    if (!usePaystackGateway && manualPhase !== 'idle') return;
+    setError('');
+    setCheckoutStage(target);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   if (items.length === 0 && !completedOrder) {
     return (
       <div className="mx-auto max-w-3xl px-4 sm:px-6 py-24 text-center space-y-5">
@@ -217,8 +287,26 @@ export function CheckoutPage() {
         try {
           await navigator.clipboard.writeText(completedOrder.verificationCode);
         } catch {
-          // clipboard may be restricted in embedded views; still unlock proof submission step
+          // clipboard may be restricted in embedded views; still record & unlock proof step
         }
+      }
+      try {
+        const res = await fetch(
+          `/api/orders/${encodeURIComponent(completedOrder.orderNumber)}/copy-code`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ verificationCode: completedOrder.verificationCode }),
+          }
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { order?: Order };
+          if (data.order) {
+            setCompletedOrder(data.order);
+          }
+        }
+      } catch {
+        // non-blocking network safety; proof submission remains accessible
       }
       setManualPhase('submit_proof');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -512,10 +600,19 @@ export function CheckoutPage() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handlePaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setPendingCheckout(null);
+
+    if (!validateContactStage()) {
+      setCheckoutStage('contact');
+      return;
+    }
+    if (!validateDeliveryStage()) {
+      setCheckoutStage('delivery');
+      return;
+    }
 
     if (usePaystackGateway) {
       setSubmitting(true);
@@ -559,17 +656,66 @@ export function CheckoutPage() {
     }
   };
 
-  const formLocked = !usePaystackGateway && manualPhase !== 'idle';
+  const detailsLocked = !usePaystackGateway && manualPhase !== 'idle';
+  const stageIndex = checkoutStage === 'contact' ? 1 : checkoutStage === 'delivery' ? 2 : 3;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 sm:px-6 py-12 lg:py-16 space-y-10">
-      <div className="space-y-2 pb-6 border-b border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
-        <p className="text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-          Guest Checkout · No Account Required
-        </p>
-        <h1 className="font-display text-4xl font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
-          Delivery &amp; Payment
-        </h1>
+    <div className="mx-auto max-w-6xl px-4 sm:px-6 py-12 lg:py-16 space-y-8">
+      {/* Header & Link-to-Link Progress Stepper */}
+      <div className="space-y-6 pb-6 border-b border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+            Guest Checkout · Step {stageIndex} of 3
+          </p>
+          <h1 className="font-display text-4xl font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+            Delivery &amp; Payment
+          </h1>
+        </div>
+
+        <nav aria-label="Checkout Steps" className="grid grid-cols-3 gap-2 sm:gap-4">
+          {[
+            { id: 'contact' as const, num: 1, label: 'Contact Details' },
+            { id: 'delivery' as const, num: 2, label: 'Delivery & Shipping' },
+            { id: 'payment' as const, num: 3, label: 'Payment' },
+          ].map((step) => {
+            const isCurrent = checkoutStage === step.id;
+            const isDone = stageIndex > step.num;
+            const canClick = isDone && !detailsLocked;
+
+            return (
+              <button
+                key={step.id}
+                type="button"
+                disabled={!canClick}
+                onClick={() => {
+                  if (canClick && (step.id === 'contact' || step.id === 'delivery')) {
+                    handleEditStage(step.id);
+                  }
+                }}
+                className={`flex items-center gap-2.5 p-3 rounded-xl border text-left transition-colors ${
+                  isCurrent
+                    ? 'border-[#B85C38] bg-[#B85C38]/10 text-[#1C1410] dark:text-[#F3EBDF]'
+                    : isDone
+                      ? 'border-[#3D5344]/40 bg-[#3D5344]/8 text-[#1C1410] dark:text-[#F3EBDF] hover:border-[#3D5344] cursor-pointer'
+                      : 'border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE]/60 dark:bg-[#1E1814]/60 text-[#5C4E45]/70 dark:text-[#B8AA9B]/60 cursor-not-allowed'
+                }`}
+              >
+                <span
+                  className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold font-mono-num ${
+                    isCurrent
+                      ? 'bg-[#B85C38] text-[#FAF5EE]'
+                      : isDone
+                        ? 'bg-[#3D5344] text-[#FAF5EE]'
+                        : 'bg-[#1C1410]/10 dark:bg-[#F3EBDF]/10 text-[#5C4E45] dark:text-[#B8AA9B]'
+                  }`}
+                >
+                  {isDone ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : step.num}
+                </span>
+                <span className="text-xs sm:text-sm font-semibold truncate">{step.label}</span>
+              </button>
+            );
+          })}
+        </nav>
       </div>
 
       {error && (
@@ -613,224 +759,623 @@ export function CheckoutPage() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-        <fieldset disabled={formLocked} className="lg:col-span-7 space-y-8 disabled:opacity-75">
-          {/* Customer Details */}
-          <section className="rounded-xl border border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 space-y-5">
-            <h2 className="font-display text-2xl font-semibold">1. Contact Details</h2>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2 space-y-1.5">
-                <label htmlFor="fullName" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Full Name
-                </label>
-                <input
-                  id="fullName"
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="e.g. Adebisi Ogunleye"
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                />
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+        {/* Left Main Stage Column — Only the active step is expanded */}
+        <div className="lg:col-span-7 space-y-6">
+          {/* STAGE 1: CONTACT DETAILS */}
+          {checkoutStage === 'contact' && (
+            <form
+              onSubmit={goToDeliveryStage}
+              className="rounded-xl border border-[#1C1410]/12 dark:border-[#F3EBDF]/12 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 sm:p-7 space-y-6"
+            >
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <User className="w-4 h-4 text-[#B85C38]" aria-hidden="true" />
+                  <h2 className="font-display text-2xl font-semibold">1. Contact Details</h2>
+                </div>
+                <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
+                  Enter your details for your official receipt and delivery coordination before selecting shipping.
+                </p>
               </div>
 
-              <div className="space-y-1.5">
-                <label htmlFor="email" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Email Address (for order receipt)
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2 space-y-1.5">
+                  <label htmlFor="fullName" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                    Full Name
+                  </label>
+                  <input
+                    id="fullName"
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Adebisi Ogunleye"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="email" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                    Email Address (for order receipt)
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="phone" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                    Phone Number
+                  </label>
+                  <input
+                    id="phone"
+                    type="tel"
+                    required
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="0803 000 0000"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                  />
+                </div>
               </div>
 
-              <div className="space-y-1.5">
-                <label htmlFor="phone" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Phone Number
-                </label>
-                <input
-                  id="phone"
-                  type="tel"
-                  required
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="0803 000 0000"
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                />
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="submit"
+                  className="w-full sm:w-auto min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] text-sm font-semibold transition-colors cursor-pointer"
+                >
+                  <span>Continue to Delivery &amp; Shipping</span>
+                  <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                </button>
               </div>
-            </div>
-          </section>
+            </form>
+          )}
 
-          {/* Regional Shipping & Destination */}
-          <section className="rounded-xl border border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 space-y-6">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Truck className="w-4 h-4 text-[#B85C38]" aria-hidden="true" />
-                <h2 className="font-display text-2xl font-semibold">2. Pick Your State &amp; Shipping</h2>
+          {/* STAGE 2: DELIVERY & SHIPPING */}
+          {checkoutStage === 'delivery' && (
+            <div className="space-y-5">
+              {/* Confirmed Contact Summary Chip */}
+              <div className="rounded-xl border border-[#3D5344]/30 bg-[#FAF5EE] dark:bg-[#1E1814] px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Check className="w-4 h-4 text-[#3D5344] dark:text-[#8FB49B] shrink-0" aria-hidden="true" />
+                  <span className="font-semibold text-[#1C1410] dark:text-[#F3EBDF] truncate">
+                    {fullName}
+                  </span>
+                  <span className="text-[#5C4E45] dark:text-[#B8AA9B] truncate">
+                    · {email} · {phone}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleEditStage('contact')}
+                  className="font-semibold underline underline-offset-4 text-[#B85C38] dark:text-[#C6A36A] cursor-pointer"
+                >
+                  Edit Contact
+                </button>
               </div>
-              <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
-                Every state is listed directly under its region below. Just tap your state to select it—your region and shipping rate will be set automatically.
-              </p>
-            </div>
 
-            <div className="space-y-3">
-              {SHIPPING_REGIONS.map((region) => {
-                const isActiveRegion = activeRegion.id === region.id;
-                const minFee = Math.min(...region.methods.map((m) => m.feeNgn));
-                const maxFee = Math.max(...region.methods.map((m) => m.feeNgn));
-                const feeRangeLabel =
-                  minFee === maxFee
-                    ? formatNgn(minFee)
-                    : `${formatNgn(minFee)} – ${formatNgn(maxFee)}`;
+              <form
+                onSubmit={goToPaymentStage}
+                className="rounded-xl border border-[#1C1410]/12 dark:border-[#F3EBDF]/12 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 sm:p-7 space-y-6"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Truck className="w-4 h-4 text-[#B85C38]" aria-hidden="true" />
+                    <h2 className="font-display text-2xl font-semibold">2. Delivery &amp; Shipping</h2>
+                  </div>
+                  <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
+                    Select your region, state, delivery option, and address to unlock payment.
+                  </p>
+                </div>
 
-                return (
-                  <div
-                    key={region.id}
-                    className={`rounded-xl border p-4 space-y-3 transition-colors ${
-                      isActiveRegion
-                        ? 'border-[#B85C38] bg-[#B85C38]/8 dark:bg-[#B85C38]/12'
-                        : 'border-[#1C1410]/12 dark:border-[#F3EBDF]/12 bg-[#F3EBDF]/70 dark:bg-[#14100D]/70'
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleRegionChange(region.id)}
-                        className="text-left text-sm font-semibold text-[#1C1410] dark:text-[#F3EBDF] hover:text-[#B85C38] transition-colors cursor-pointer"
-                      >
-                        {region.label}
-                      </button>
-                      <span className="font-mono-num text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                        {feeRangeLabel}
-                      </span>
+                {/* 2A. Region Selector */}
+                <div className="space-y-2.5">
+                  <span className="block text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                    A. Select Your Region
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {SHIPPING_REGIONS.map((region) => {
+                      const isActiveRegion = activeRegion.id === region.id;
+                      const minFee = Math.min(...region.methods.map((m) => m.feeNgn));
+                      const maxFee = Math.max(...region.methods.map((m) => m.feeNgn));
+                      const feeRangeLabel =
+                        minFee === maxFee
+                          ? formatNgn(minFee)
+                          : `${formatNgn(minFee)} – ${formatNgn(maxFee)}`;
+
+                      return (
+                        <button
+                          key={region.id}
+                          type="button"
+                          onClick={() => handleRegionChange(region.id)}
+                          aria-pressed={isActiveRegion}
+                          className={`text-left rounded-xl border p-3.5 transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                            isActiveRegion
+                              ? 'border-[#B85C38] bg-[#B85C38]/10 dark:bg-[#B85C38]/15'
+                              : 'border-[#1C1410]/12 dark:border-[#F3EBDF]/12 bg-[#F3EBDF]/70 dark:bg-[#14100D]/70 hover:border-[#B85C38]/50'
+                          }`}
+                        >
+                          <span className="text-xs sm:text-sm font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                            {region.label}
+                          </span>
+                          <span className="font-mono-num text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B] shrink-0">
+                            {feeRangeLabel}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2B. State Selector (Focused to Selected Region Only) */}
+                <div className="space-y-2.5 pt-2 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
+                  <span className="block text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                    B. Select State in {activeRegion.label}
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {activeRegion.states.map((st) => {
+                      const isSelectedState = shippingQuote.state === st;
+                      return (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => handleRegionChange(activeRegion.id, st)}
+                          aria-pressed={isSelectedState}
+                          className={`min-h-[38px] px-3.5 py-1.5 rounded-lg border text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                            isSelectedState
+                              ? 'border-[#B85C38] bg-[#B85C38] text-[#FAF5EE]'
+                              : 'border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-[#1C1410] dark:text-[#F3EBDF] hover:border-[#B85C38]/60'
+                          }`}
+                        >
+                          {st}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2C. Delivery / Pick Up Method */}
+                <div className="space-y-2.5 pt-2 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
+                  <span className="block text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                    C. Delivery / Pick Up Option for {shippingQuote.state}
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {activeRegion.methods.map((option) => {
+                      const selected = shippingQuote.method.id === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => handleMethodChange(option.id)}
+                          className={`text-left p-4 rounded-xl border transition-colors cursor-pointer space-y-1 ${
+                            selected
+                              ? 'border-[#B85C38] bg-[#B85C38]/8 dark:bg-[#B85C38]/15'
+                              : 'border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] hover:border-[#B85C38]/50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                              {option.label}
+                            </span>
+                            <span className="font-mono-num text-sm font-semibold text-[#B85C38] dark:text-[#C6A36A] shrink-0">
+                              {formatNgn(option.feeNgn)}
+                            </span>
+                          </div>
+                          <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
+                            {option.description}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2D. Destination Address & Note */}
+                <div className="space-y-3 pt-2 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
+                  <span className="block text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                    D. Destination Details
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="sm:col-span-2 space-y-1.5">
+                      <label htmlFor="address" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                        {shippingQuote.method.id === 'pickup'
+                          ? 'Pick Up Contact Landmark'
+                          : shippingQuote.method.id === 'logistics_pickup'
+                            ? 'Preferred Logistics Park / Terminal'
+                            : 'Street Delivery Address'}
+                      </label>
+                      <input
+                        id="address"
+                        type="text"
+                        required
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        placeholder={
+                          shippingQuote.method.id === 'logistics_pickup'
+                            ? 'Preferred motor park or waybill logistics office'
+                            : 'House number, street, and nearest landmark'
+                        }
+                        className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                      />
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      {region.states.map((st) => {
-                        const isSelectedState =
-                          isActiveRegion && shippingQuote.state === st;
-                        return (
-                          <button
-                            key={st}
-                            type="button"
-                            onClick={() => handleRegionChange(region.id, st)}
-                            aria-pressed={isSelectedState}
-                            className={`min-h-[38px] px-3 py-1.5 rounded-lg border text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                              isSelectedState
-                                ? 'border-[#B85C38] bg-[#B85C38] text-[#FAF5EE]'
-                                : 'border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#FAF5EE] dark:bg-[#1E1814] text-[#1C1410] dark:text-[#F3EBDF] hover:border-[#B85C38]/60'
-                            }`}
-                          >
-                            {st}
-                          </button>
-                        );
-                      })}
+                    <div className="space-y-1.5">
+                      <label htmlFor="city" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                        City / Town
+                      </label>
+                      <input
+                        id="city"
+                        type="text"
+                        required
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        placeholder="e.g. Ikeja, Wuse, Port Harcourt"
+                        className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label htmlFor="note" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
+                        Delivery Note (optional)
+                      </label>
+                      <input
+                        id="note"
+                        type="text"
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder="Preferred call time or park instruction"
+                        className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                      />
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                </div>
 
-            {/* Shipping Method Options for Chosen Region */}
-            <div className="space-y-2.5">
-              <span className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                Delivery / Pick Up Option for {shippingQuote.state}
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {activeRegion.methods.map((option) => {
-                  const selected = shippingQuote.method.id === option.id;
-                  return (
+                <div className="pt-2 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleEditStage('contact')}
+                    className="min-h-[46px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-xs font-semibold hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                    <span>Back to Contact</span>
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] text-sm font-semibold transition-colors cursor-pointer"
+                  >
+                    <span>Continue to Payment</span>
+                    <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* STAGE 3: SEQUENTIAL LINK-TO-LINK PAYMENT */}
+          {checkoutStage === 'payment' && (
+            <div className="space-y-5">
+              {/* Confirmed Contact & Delivery Summary Strip */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="rounded-xl border border-[#3D5344]/30 bg-[#FAF5EE] dark:bg-[#1E1814] p-4 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                      <User className="w-3.5 h-3.5 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
+                      <span>Contact Confirmed</span>
+                    </span>
+                    {!detailsLocked && (
+                      <button
+                        type="button"
+                        onClick={() => handleEditStage('contact')}
+                        className="font-semibold underline underline-offset-4 text-[#B85C38] dark:text-[#C6A36A] cursor-pointer"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                  <p className="font-medium text-[#1C1410] dark:text-[#F3EBDF]">{fullName}</p>
+                  <p className="text-[#5C4E45] dark:text-[#B8AA9B] truncate">
+                    {email} · {phone}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-[#3D5344]/30 bg-[#FAF5EE] dark:bg-[#1E1814] p-4 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                      <MapPin className="w-3.5 h-3.5 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
+                      <span>Delivery Confirmed</span>
+                    </span>
+                    {!detailsLocked && (
+                      <button
+                        type="button"
+                        onClick={() => handleEditStage('delivery')}
+                        className="font-semibold underline underline-offset-4 text-[#B85C38] dark:text-[#C6A36A] cursor-pointer"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                  <p className="font-medium text-[#1C1410] dark:text-[#F3EBDF]">
+                    {shippingQuote.method.label} · {shippingQuote.state}
+                  </p>
+                  <p className="text-[#5C4E45] dark:text-[#B8AA9B] truncate">
+                    {address}, {city}
+                  </p>
+                </div>
+              </div>
+
+              {usePaystackGateway ? (
+                <form
+                  onSubmit={handlePaymentSubmit}
+                  className="rounded-xl border border-[#1C1410]/12 dark:border-[#F3EBDF]/12 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 sm:p-7 space-y-5"
+                >
+                  <h2 className="font-display text-2xl font-semibold">3. Payment</h2>
+
+                  <div className="rounded-xl border border-[#3D5344]/40 bg-[#3D5344]/8 dark:border-[#567560]/40 dark:bg-[#567560]/12 p-4 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                        <CreditCard className="w-4 h-4 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
+                        <span>Paystack Checkout</span>
+                      </span>
+                      <span className="text-[11px] font-medium text-[#3D5344] dark:text-[#8FB49B]">
+                        Live
+                      </span>
+                    </div>
+                    <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
+                      Pay securely with Visa, Mastercard, Verve, Bank Transfer, or USSD via Paystack. Includes products and your selected regional shipping fee.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3">
                     <button
-                      key={option.id}
                       type="button"
-                      onClick={() => handleMethodChange(option.id)}
-                      className={`text-left p-4 rounded-xl border transition-colors cursor-pointer space-y-1 ${
-                        selected
-                          ? 'border-[#B85C38] bg-[#B85C38]/8 dark:bg-[#B85C38]/15'
-                          : 'border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] hover:border-[#B85C38]/50'
-                      }`}
+                      onClick={() => handleEditStage('delivery')}
+                      className="min-h-[46px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-xs font-semibold hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 cursor-pointer"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
-                          {option.label}
-                        </span>
-                        <span className="font-mono-num text-sm font-semibold text-[#B85C38] dark:text-[#C6A36A] shrink-0">
-                          {formatNgn(option.feeNgn)}
+                      <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                      <span>Back to Delivery</span>
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] disabled:opacity-60 text-sm font-semibold transition-colors cursor-pointer"
+                    >
+                      <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+                      <span>
+                        {submitting
+                          ? 'Initializing Paystack…'
+                          : `Pay ${formatNgn(finalTotalNgn)} with Paystack`}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form
+                  onSubmit={handlePaymentSubmit}
+                  ref={paymentSectionRef as unknown as React.RefObject<HTMLFormElement>}
+                  className="rounded-xl border-2 border-[#B85C38]/60 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 sm:p-7 space-y-5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="font-display text-2xl font-semibold flex items-center gap-2">
+                      <Banknote className="w-5 h-5 text-[#B85C38]" aria-hidden="true" />
+                      <span>3. Payment</span>
+                    </h2>
+                    {manualPhase === 'idle' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleEditStage('delivery')}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#5C4E45] dark:text-[#B8AA9B] hover:text-[#B85C38] cursor-pointer"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Back to Delivery</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManualPhase('idle');
+                          setWaitSecondsLeft(MANUAL_WAIT_SECONDS);
+                          setPaymentMadeChecked(false);
+                          setError('');
+                        }}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#5C4E45] dark:text-[#B8AA9B] hover:text-[#B85C38] cursor-pointer"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Restart Payment Step</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Phase 0: Click "Make Payment" to reveal deposit details */}
+                  {manualPhase === 'idle' && (
+                    <div className="space-y-4">
+                      <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
+                        Your contact and delivery details are locked in. Click{' '}
+                        <strong className="text-[#1C1410] dark:text-[#F3EBDF]">Make Payment</strong>{' '}
+                        to view the deposit account details.
+                      </p>
+                      <button
+                        type="submit"
+                        className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] text-sm font-extrabold uppercase tracking-wide transition-colors cursor-pointer"
+                      >
+                        <Banknote className="w-4 h-4" aria-hidden="true" />
+                        <span>Make Payment</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Phase 1: Show ONLY Deposit Account Details + Copy button (Amount & timer wait until copied) */}
+                  {manualPhase === 'deposit' && (
+                    <div className="space-y-4">
+                      <p className="text-xs font-bold uppercase tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
+                        Step 1: Copy the account number below to reveal the exact amount &amp; timer
+                      </p>
+
+                      <div className="rounded-xl border border-[#1C1410]/20 dark:border-[#F3EBDF]/20 bg-[#F3EBDF] dark:bg-[#14100D] p-5 space-y-4">
+                        <div className="space-y-1.5 uppercase">
+                          <p className="font-mono-num text-2xl sm:text-3xl font-extrabold tracking-wider text-[#1C1410] dark:text-[#F3EBDF]">
+                            {storeConfig.opay.accountNumber}
+                          </p>
+                          <p className="text-base sm:text-lg font-extrabold tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
+                            {storeConfig.opay.bankName}
+                          </p>
+                          <p className="text-sm sm:text-base font-extrabold tracking-wide text-[#1C1410] dark:text-[#F3EBDF]">
+                            {storeConfig.opay.accountName}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleCopyAccountForPayment}
+                          className="w-full min-h-[46px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#1C1410] text-[#F3EBDF] dark:bg-[#F3EBDF] dark:text-[#1C1410] hover:bg-[#B85C38] dark:hover:bg-[#C6A36A] text-xs sm:text-sm font-extrabold uppercase tracking-wide transition-colors cursor-pointer"
+                        >
+                          <Copy className="w-4 h-4" aria-hidden="true" />
+                          <span>Copy Account Number ({storeConfig.opay.accountNumber})</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Phase 2: Copied -> Exact Amount to Pay + 60-Second Countdown Timer */}
+                  {manualPhase === 'countdown' && (
+                    <div className="space-y-4">
+                      <div className="inline-flex items-center gap-2 text-xs font-bold text-[#3D5344] dark:text-[#8FB49B]">
+                        <Check className="w-4 h-4" aria-hidden="true" />
+                        <span>
+                          Account Copied: {storeConfig.opay.accountNumber} ({storeConfig.opay.bankName} ·{' '}
+                          {storeConfig.opay.accountName})
                         </span>
                       </div>
-                      <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
-                        {option.description}
+
+                      <div className="rounded-xl border border-[#1C1410]/20 dark:border-[#F3EBDF]/20 bg-[#F3EBDF] dark:bg-[#14100D] p-5 space-y-3">
+                        <p className="text-xs font-bold uppercase tracking-wide text-[#5C4E45] dark:text-[#B8AA9B]">
+                          Exact Amount to Transfer{promo.isActive ? ' (10% Product Off Applied)' : ''}
+                        </p>
+                        <p className="font-mono-num text-3xl font-extrabold text-[#1C1410] dark:text-[#F3EBDF]">
+                          {formatNgn(finalTotalNgn)}
+                        </p>
+                        <div className="pt-2 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10 text-xs font-bold uppercase tracking-wide text-[#1C1410] dark:text-[#F3EBDF] space-y-0.5">
+                          <p>{storeConfig.opay.accountNumber}</p>
+                          <p>{storeConfig.opay.bankName}</p>
+                          <p>{storeConfig.opay.accountName}</p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border-2 border-[#B85C38] bg-[#B85C38]/10 p-4 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
+                            <Clock className="w-4 h-4" aria-hidden="true" />
+                            <span>Transfer Countdown</span>
+                          </span>
+                          <span className="font-mono-num tabular-nums text-xl font-extrabold text-[#1C1410] dark:text-[#F3EBDF]">
+                            {waitSecondsLeft}s
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold leading-relaxed text-[#1C1410] dark:text-[#F3EBDF]">
+                          Complete your transfer of {formatNgn(finalTotalNgn)} now. Wait {waitSecondsLeft}{' '}
+                          seconds for the Payment Made confirmation and code step to unlock.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Phase 3: 60 Seconds Elapsed -> Payment Made Checkbox + Confirm */}
+                  {manualPhase === 'confirm' && (
+                    <div className="space-y-4">
+                      <div className="rounded-xl border border-[#3D5344] bg-[#3D5344]/8 dark:bg-[#3D5344]/15 p-4 space-y-2">
+                        <div className="flex items-center justify-between gap-2 text-xs font-extrabold uppercase tracking-wide text-[#3D5344] dark:text-[#8FB49B]">
+                          <span>Transfer Countdown Complete</span>
+                          <span className="font-mono-num">{formatNgn(finalTotalNgn)}</span>
+                        </div>
+                        <p className="text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
+                          Tick Payment Made below to generate your 4-letter verification code.
+                        </p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label
+                          htmlFor="opaySenderName"
+                          className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]"
+                        >
+                          Sender Name on OPay Transfer (optional)
+                        </label>
+                        <input
+                          id="opaySenderName"
+                          type="text"
+                          value={opaySenderName}
+                          onChange={(e) => setOpaySenderName(e.target.value)}
+                          placeholder="Account name used for transfer"
+                          className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
+                        />
+                      </div>
+
+                      <label
+                        htmlFor="payment-made-checkbox"
+                        className="flex items-start gap-3 rounded-xl border-2 border-[#3D5344] bg-[#FAF5EE] dark:bg-[#14100D] p-3.5 text-xs font-bold uppercase tracking-wide cursor-pointer"
+                      >
+                        <input
+                          id="payment-made-checkbox"
+                          type="checkbox"
+                          checked={paymentMadeChecked}
+                          onChange={(e) => setPaymentMadeChecked(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 accent-[#3D5344] cursor-pointer shrink-0"
+                        />
+                        <span className="leading-relaxed text-[#1C1410] dark:text-[#F3EBDF]">
+                          PAYMENT MADE — I HAVE TRANSFERRED {formatNgn(finalTotalNgn)} TO{' '}
+                          {storeConfig.opay.accountNumber} ({storeConfig.opay.bankName} ·{' '}
+                          {storeConfig.opay.accountName})
+                        </span>
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={handleConfirmManualPayment}
+                        disabled={submitting || !paymentMadeChecked}
+                        className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[#3D5344] text-[#FAF5EE] hover:bg-[#314437] disabled:opacity-55 text-sm font-extrabold uppercase tracking-wide transition-colors cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+                        <span>
+                          {submitting
+                            ? 'Generating 4-Letter Code…'
+                            : !paymentMadeChecked
+                              ? 'Tick Payment Made Above'
+                              : 'Confirm Payment & Reveal Code'}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Bold Strict WhatsApp Reminder (shown subtly from deposit step onward without exposing link prematurely) */}
+                  {manualPhase !== 'idle' && (
+                    <div className="rounded-lg border border-[#B85C38]/40 bg-[#B85C38]/8 p-3.5 flex items-start gap-2.5">
+                      <AlertTriangle
+                        className="w-4 h-4 text-[#B85C38] dark:text-[#C6A36A] shrink-0 mt-0.5"
+                        aria-hidden="true"
+                      />
+                      <p className="text-[11px] font-bold leading-relaxed text-[#1C1410] dark:text-[#F3EBDF]">
+                        STRICT INSTRUCTION: AFTER PAYMENT AND COPYING YOUR 4-LETTER CODE, SCREENSHOT YOUR ORDER RECEIPT AND SEND YOUR PROOF + CODE TO WHATSAPP{' '}
+                        <span className="font-mono-num font-extrabold underline">
+                          {storeConfig.opay.whatsappNumber}
+                        </span>{' '}
+                        USING THE LINK UNLOCKED AT THE FINAL STEP.
                       </p>
-                    </button>
-                  );
-                })}
-              </div>
+                    </div>
+                  )}
+                </form>
+              )}
             </div>
+          )}
+        </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2 space-y-1.5">
-                <label htmlFor="address" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  {shippingQuote.method.id === 'pickup'
-                    ? 'Pick Up Contact Landmark'
-                    : shippingQuote.method.id === 'logistics_pickup'
-                      ? 'Preferred Logistics Park / Terminal'
-                      : 'Street Delivery Address'}
-                </label>
-                <input
-                  id="address"
-                  type="text"
-                  required
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder={
-                    shippingQuote.method.id === 'logistics_pickup'
-                      ? 'Preferred motor park or waybill logistics office'
-                      : 'House number, street, and nearest landmark'
-                  }
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label htmlFor="city" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  City / Town
-                </label>
-                <input
-                  id="city"
-                  type="text"
-                  required
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="e.g. Ikeja, Wuse, Port Harcourt"
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label htmlFor="note" className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Delivery Note (optional)
-                </label>
-                <input
-                  id="note"
-                  type="text"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Preferred call time or park instruction"
-                  className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                />
-              </div>
-            </div>
-          </section>
-        </fieldset>
-
-        {/* Summary + Sequential Link-to-Link Payment Section */}
-        <aside className="lg:col-span-5 space-y-6">
+        {/* Sticky Order & Shipping Summary Sidebar */}
+        <aside className="lg:col-span-5 space-y-6 lg:sticky lg:top-24">
           <section className="rounded-xl border border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 space-y-5">
             <h2 className="font-display text-2xl font-semibold">Bag &amp; Shipping Summary</h2>
 
@@ -876,10 +1421,12 @@ export function CheckoutPage() {
 
               <div className="flex justify-between gap-3">
                 <span className="text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Shipping · {shippingQuote.method.label} ({shippingQuote.state})
+                  {checkoutStage === 'contact'
+                    ? 'Shipping (Selected next)'
+                    : `Shipping · ${shippingQuote.method.label} (${shippingQuote.state})`}
                 </span>
                 <span className="font-mono-num font-semibold shrink-0">
-                  {formatNgn(shippingFeeNgn)}
+                  {checkoutStage === 'contact' ? '—' : formatNgn(shippingFeeNgn)}
                 </span>
               </div>
 
@@ -891,255 +1438,22 @@ export function CheckoutPage() {
 
               <div className="flex justify-between pt-3 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
                 <span className="font-semibold">
-                  {usePaystackGateway ? 'Total to Pay on Paystack' : 'Checkout Total'}
+                  {checkoutStage === 'contact'
+                    ? 'Products Total'
+                    : usePaystackGateway
+                      ? 'Total to Pay on Paystack'
+                      : 'Checkout Total'}
                 </span>
                 <span className="font-mono-num text-lg font-semibold">
-                  {formatNgn(finalTotalNgn)}
+                  {formatNgn(checkoutStage === 'contact' ? promo.totalNgn : finalTotalNgn)}
                 </span>
               </div>
             </div>
           </section>
 
-          {usePaystackGateway ? (
-            <section className="rounded-xl border border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 space-y-4">
-              <h2 className="font-display text-2xl font-semibold">3. Payment</h2>
-
-              <div className="rounded-xl border border-[#3D5344]/40 bg-[#3D5344]/8 dark:border-[#567560]/40 dark:bg-[#567560]/12 p-4 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                    <CreditCard className="w-4 h-4 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
-                    <span>Paystack Checkout</span>
-                  </span>
-                  <span className="text-[11px] font-medium text-[#3D5344] dark:text-[#8FB49B]">
-                    Live
-                  </span>
-                </div>
-                <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
-                  Pay securely with Visa, Mastercard, Verve, Bank Transfer, or USSD via Paystack. Includes products and your selected regional shipping fee.
-                </p>
-              </div>
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] disabled:opacity-60 text-sm font-semibold transition-colors cursor-pointer"
-              >
-                <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-                <span>
-                  {submitting
-                    ? 'Initializing Paystack…'
-                    : `Pay ${formatNgn(finalTotalNgn)} with Paystack`}
-                </span>
-              </button>
-            </section>
-          ) : (
-            <section
-              ref={paymentSectionRef}
-              className="rounded-xl border-2 border-[#B85C38]/60 bg-[#FAF5EE] dark:bg-[#1E1814] p-6 space-y-5"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="font-display text-2xl font-semibold flex items-center gap-2">
-                  <Banknote className="w-5 h-5 text-[#B85C38]" aria-hidden="true" />
-                  <span>3. Payment</span>
-                </h2>
-                {manualPhase !== 'idle' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setManualPhase('idle');
-                      setWaitSecondsLeft(MANUAL_WAIT_SECONDS);
-                      setPaymentMadeChecked(false);
-                      setError('');
-                    }}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-[#5C4E45] dark:text-[#B8AA9B] hover:text-[#B85C38] cursor-pointer"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Edit Details</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Phase 0: Click "Make Payment" to reveal deposit details */}
-              {manualPhase === 'idle' && (
-                <div className="space-y-4">
-                  <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
-                    Confirm your contact and Nigerian delivery details, then click{' '}
-                    <strong className="text-[#1C1410] dark:text-[#F3EBDF]">Make Payment</strong>{' '}
-                    to view the deposit account details.
-                  </p>
-                  <button
-                    type="submit"
-                    className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[#B85C38] text-[#FAF5EE] hover:bg-[#9E4C2C] text-sm font-extrabold uppercase tracking-wide transition-colors cursor-pointer"
-                  >
-                    <Banknote className="w-4 h-4" aria-hidden="true" />
-                    <span>Make Payment</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Phase 1: Show ONLY Deposit Account Details + Copy button (Amount & timer wait until copied) */}
-              {manualPhase === 'deposit' && (
-                <div className="space-y-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
-                    Step 1: Copy the account number below to reveal the exact amount &amp; timer
-                  </p>
-
-                  <div className="rounded-xl border border-[#1C1410]/20 dark:border-[#F3EBDF]/20 bg-[#F3EBDF] dark:bg-[#14100D] p-5 space-y-4">
-                    <div className="space-y-1.5 uppercase">
-                      <p className="font-mono-num text-2xl sm:text-3xl font-extrabold tracking-wider text-[#1C1410] dark:text-[#F3EBDF]">
-                        {storeConfig.opay.accountNumber}
-                      </p>
-                      <p className="text-base sm:text-lg font-extrabold tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
-                        {storeConfig.opay.bankName}
-                      </p>
-                      <p className="text-sm sm:text-base font-extrabold tracking-wide text-[#1C1410] dark:text-[#F3EBDF]">
-                        {storeConfig.opay.accountName}
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleCopyAccountForPayment}
-                      className="w-full min-h-[46px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#1C1410] text-[#F3EBDF] dark:bg-[#F3EBDF] dark:text-[#1C1410] hover:bg-[#B85C38] dark:hover:bg-[#C6A36A] text-xs sm:text-sm font-extrabold uppercase tracking-wide transition-colors cursor-pointer"
-                    >
-                      <Copy className="w-4 h-4" aria-hidden="true" />
-                      <span>Copy Account Number ({storeConfig.opay.accountNumber})</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Phase 2: Copied -> Exact Amount to Pay + 60-Second Countdown Timer */}
-              {manualPhase === 'countdown' && (
-                <div className="space-y-4">
-                  <div className="inline-flex items-center gap-2 text-xs font-bold text-[#3D5344] dark:text-[#8FB49B]">
-                    <Check className="w-4 h-4" aria-hidden="true" />
-                    <span>
-                      Account Copied: {storeConfig.opay.accountNumber} ({storeConfig.opay.bankName} ·{' '}
-                      {storeConfig.opay.accountName})
-                    </span>
-                  </div>
-
-                  <div className="rounded-xl border border-[#1C1410]/20 dark:border-[#F3EBDF]/20 bg-[#F3EBDF] dark:bg-[#14100D] p-5 space-y-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-[#5C4E45] dark:text-[#B8AA9B]">
-                      Exact Amount to Transfer{promo.isActive ? ' (10% Product Off Applied)' : ''}
-                    </p>
-                    <p className="font-mono-num text-3xl font-extrabold text-[#1C1410] dark:text-[#F3EBDF]">
-                      {formatNgn(finalTotalNgn)}
-                    </p>
-                    <div className="pt-2 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10 text-xs font-bold uppercase tracking-wide text-[#1C1410] dark:text-[#F3EBDF] space-y-0.5">
-                      <p>{storeConfig.opay.accountNumber}</p>
-                      <p>{storeConfig.opay.bankName}</p>
-                      <p>{storeConfig.opay.accountName}</p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border-2 border-[#B85C38] bg-[#B85C38]/10 p-4 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
-                        <Clock className="w-4 h-4" aria-hidden="true" />
-                        <span>Transfer Countdown</span>
-                      </span>
-                      <span className="font-mono-num tabular-nums text-xl font-extrabold text-[#1C1410] dark:text-[#F3EBDF]">
-                        {waitSecondsLeft}s
-                      </span>
-                    </div>
-                    <p className="text-xs font-semibold leading-relaxed text-[#1C1410] dark:text-[#F3EBDF]">
-                      Complete your transfer of {formatNgn(finalTotalNgn)} now. Wait {waitSecondsLeft}{' '}
-                      seconds for the Payment Made confirmation and code step to unlock.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Phase 3: 60 Seconds Elapsed -> Payment Made Checkbox + Confirm */}
-              {manualPhase === 'confirm' && (
-                <div className="space-y-4">
-                  <div className="rounded-xl border border-[#3D5344] bg-[#3D5344]/8 dark:bg-[#3D5344]/15 p-4 space-y-2">
-                    <div className="flex items-center justify-between gap-2 text-xs font-extrabold uppercase tracking-wide text-[#3D5344] dark:text-[#8FB49B]">
-                      <span>Transfer Countdown Complete</span>
-                      <span className="font-mono-num">{formatNgn(finalTotalNgn)}</span>
-                    </div>
-                    <p className="text-xs font-semibold text-[#1C1410] dark:text-[#F3EBDF]">
-                      Tick Payment Made below to generate your 4-letter verification code.
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label
-                      htmlFor="opaySenderName"
-                      className="block text-xs font-medium text-[#5C4E45] dark:text-[#B8AA9B]"
-                    >
-                      Sender Name on OPay Transfer (optional)
-                    </label>
-                    <input
-                      id="opaySenderName"
-                      type="text"
-                      value={opaySenderName}
-                      onChange={(e) => setOpaySenderName(e.target.value)}
-                      placeholder="Account name used for transfer"
-                      className="w-full min-h-[42px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-sm focus:outline-none focus:ring-2 focus:ring-[#B85C38]"
-                    />
-                  </div>
-
-                  <label
-                    htmlFor="payment-made-checkbox"
-                    className="flex items-start gap-3 rounded-xl border-2 border-[#3D5344] bg-[#FAF5EE] dark:bg-[#14100D] p-3.5 text-xs font-bold uppercase tracking-wide cursor-pointer"
-                  >
-                    <input
-                      id="payment-made-checkbox"
-                      type="checkbox"
-                      checked={paymentMadeChecked}
-                      onChange={(e) => setPaymentMadeChecked(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 accent-[#3D5344] cursor-pointer shrink-0"
-                    />
-                    <span className="leading-relaxed text-[#1C1410] dark:text-[#F3EBDF]">
-                      PAYMENT MADE — I HAVE TRANSFERRED {formatNgn(finalTotalNgn)} TO{' '}
-                      {storeConfig.opay.accountNumber} ({storeConfig.opay.bankName} ·{' '}
-                      {storeConfig.opay.accountName})
-                    </span>
-                  </label>
-
-                  <button
-                    type="button"
-                    onClick={handleConfirmManualPayment}
-                    disabled={submitting || !paymentMadeChecked}
-                    className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[#3D5344] text-[#FAF5EE] hover:bg-[#314437] disabled:opacity-55 text-sm font-extrabold uppercase tracking-wide transition-colors cursor-pointer disabled:cursor-not-allowed"
-                  >
-                    <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-                    <span>
-                      {submitting
-                        ? 'Generating 4-Letter Code…'
-                        : !paymentMadeChecked
-                          ? 'Tick Payment Made Above'
-                          : 'Confirm Payment & Reveal Code'}
-                    </span>
-                  </button>
-                </div>
-              )}
-
-              {/* Bold Strict WhatsApp Reminder (shown subtly from deposit step onward without exposing link prematurely) */}
-              {manualPhase !== 'idle' && (
-                <div className="rounded-lg border border-[#B85C38]/40 bg-[#B85C38]/8 p-3.5 flex items-start gap-2.5">
-                  <AlertTriangle
-                    className="w-4 h-4 text-[#B85C38] dark:text-[#C6A36A] shrink-0 mt-0.5"
-                    aria-hidden="true"
-                  />
-                  <p className="text-[11px] font-bold leading-relaxed text-[#1C1410] dark:text-[#F3EBDF]">
-                    STRICT INSTRUCTION: AFTER PAYMENT AND COPYING YOUR 4-LETTER CODE, SCREENSHOT YOUR ORDER RECEIPT AND SEND YOUR PROOF + CODE TO WHATSAPP{' '}
-                    <span className="font-mono-num font-extrabold underline">
-                      {storeConfig.opay.whatsappNumber}
-                    </span>{' '}
-                    USING THE LINK UNLOCKED AT THE FINAL STEP.
-                  </p>
-                </div>
-              )}
-            </section>
-          )}
-
           <PromoCountdownCard variant="compact" />
         </aside>
-      </form>
+      </div>
     </div>
   );
 }

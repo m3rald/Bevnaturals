@@ -88,6 +88,7 @@ export interface Order {
   deliveryFeeNgn: number | null;
   studioNote: string;
   verificationCode?: string;
+  codeCopiedAt?: string;
   source?: 'store' | 'paystack';
   emailFeedback?: {
     sentAt?: string;

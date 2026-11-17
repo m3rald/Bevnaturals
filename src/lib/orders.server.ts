@@ -232,3 +232,32 @@ export async function upsertOrderFromPaystack(order: Order): Promise<Order> {
   });
 }
 
+export async function markOrderCodeCopied(
+  orderNumber: string,
+  verificationCode?: string
+): Promise<Order | null> {
+  return enqueueWrite(async () => {
+    const orders = await readOrders();
+    const normalized = orderNumber.trim().toUpperCase();
+    const idx = orders.findIndex((o) => o.orderNumber.toUpperCase() === normalized);
+    if (idx === -1) return null;
+    const current = orders[idx];
+    if (
+      verificationCode &&
+      current.verificationCode &&
+      current.verificationCode.toUpperCase() !== verificationCode.trim().toUpperCase()
+    ) {
+      return null;
+    }
+    const now = new Date().toISOString();
+    const updated: Order = {
+      ...current,
+      codeCopiedAt: current.codeCopiedAt || now,
+      updatedAt: now,
+    };
+    orders[idx] = updated;
+    await writeOrders(orders);
+    return updated;
+  });
+}
+

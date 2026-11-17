@@ -22,6 +22,7 @@ import {
   findOrderByNumber,
   findOrderByPaymentReference,
   generateVerificationCode,
+  markOrderCodeCopied,
   markOrderPaidByReference,
   readOrders,
   setOrderEmailFeedback,
@@ -477,6 +478,27 @@ export function createApiApp(): express.Express {
     res.json({ order });
   });
 
+  app.post('/api/orders/:orderNumber/copy-code', async (req, res) => {
+    try {
+      const orderNumber = req.params.orderNumber?.trim() || '';
+      const body = req.body as { verificationCode?: string };
+      if (!orderNumber) {
+        res.status(400).json({ error: 'Order number is required.' });
+        return;
+      }
+
+      const updated = await markOrderCodeCopied(orderNumber, body?.verificationCode);
+      if (!updated) {
+        res.status(404).json({ error: 'Order not found or verification code mismatch.' });
+        return;
+      }
+      res.json({ order: updated });
+    } catch (err) {
+      console.error('Copy code history sync error:', err);
+      res.status(500).json({ error: 'Unable to record copied verification code.' });
+    }
+  });
+
   app.post('/api/order-lookup/auth', (req, res) => {
     const body = req.body as { pin?: string };
     const pin = body.pin || '';
@@ -492,16 +514,20 @@ export function createApiApp(): express.Express {
     try {
       const rawQuery = String(req.query.q || '').trim();
       if (!rawQuery) {
-        res.status(400).json({ error: 'Please paste an order number (e.g. BN-1041-XXXX).' });
+        res.status(400).json({
+          error: 'Please paste an order number (e.g. BN-1041-XXXX) or 4-letter code.',
+        });
         return;
       }
 
       const upper = rawQuery.toUpperCase();
       const localOrders = await readOrders();
       let matched =
-        localOrders.find((o) => o.orderNumber.toUpperCase() === upper) || null;
+        localOrders.find((o) => o.orderNumber.toUpperCase() === upper) ||
+        localOrders.find((o) => (o.verificationCode || '').toUpperCase() === upper) ||
+        null;
 
-      if (!matched || matched.status === 'awaiting_payment') {
+      if (!matched || (matched.paymentMethod === 'paystack' && matched.status === 'awaiting_payment')) {
         const secretKey = getPaystackSecretKey();
         const remote = await findPaystackOrderByOrderNumber(secretKey, rawQuery);
         if (remote) {
@@ -514,7 +540,7 @@ export function createApiApp(): express.Express {
 
       if (!matched) {
         res.status(404).json({
-          error: `No verified order found for order number "${rawQuery}". Check the order number (e.g. BN-1041-XXXX) and try again.`,
+          error: `No verified order found for "${rawQuery}". Check the order number (e.g. BN-1041-XXXX) or 4-letter verification code and try again.`,
         });
         return;
       }
@@ -535,7 +561,9 @@ export function createApiApp(): express.Express {
       const byKey = new Map<string, Order>();
 
       for (const ord of localOrders) {
-        if (ord.status !== 'awaiting_payment' || ord.paymentMethod === 'opay') {
+        const includeManual = ord.paymentMethod === 'opay' && Boolean(ord.codeCopiedAt);
+        const includePaid = ord.paymentMethod !== 'opay' && ord.status !== 'awaiting_payment';
+        if (includeManual || includePaid) {
           byKey.set(ord.paymentReference || ord.orderNumber, ord);
         }
       }

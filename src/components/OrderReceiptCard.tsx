@@ -15,7 +15,7 @@ import { formatNgn } from '../lib/catalog';
 import { storeConfig } from '../lib/store-config';
 import type { Order, OrderStatus } from '../lib/types';
 
-function getStatusMeta(order: Order): {
+function getStatusMeta(order: Order, lookupView = false): {
   label: string;
   description: string;
   icon: typeof Clock;
@@ -23,27 +23,41 @@ function getStatusMeta(order: Order): {
   const isOpay = order.paymentMethod === 'opay';
   const map: Record<OrderStatus, { label: string; description: string; icon: typeof Clock }> = {
     awaiting_payment: {
-      label: isOpay ? 'Transfer Submitted · Verify on WhatsApp' : 'Awaiting Payment',
-      description: isOpay
-        ? `Send a screenshot of this placed order and your 4-letter verification code to WhatsApp ${storeConfig.opay.whatsappNumber}.`
-        : 'Complete your payment to queue your order for packing.',
+      label: lookupView
+        ? isOpay
+          ? 'Manual OPay Order'
+          : 'Awaiting Payment'
+        : isOpay
+          ? 'Transfer Submitted · Verify on WhatsApp'
+          : 'Awaiting Payment',
+      description: lookupView
+        ? isOpay
+          ? 'Manual bank transfer order recorded for store verification.'
+          : 'Order awaiting payment confirmation.'
+        : isOpay
+          ? `Send a screenshot of this placed order and your 4-letter verification code to WhatsApp ${storeConfig.opay.whatsappNumber}.`
+          : 'Complete your payment to queue your order for packing.',
       icon: Clock,
     },
     paid: {
       label: 'Payment Confirmed',
-      description:
-        'Your payment is verified and queued for fresh batch packing in Ibadan.',
+      description: lookupView
+        ? 'Verified payment record.'
+        : 'Your payment is verified and queued for fresh batch packing in Ibadan.',
       icon: CheckCircle2,
     },
     preparing: {
       label: 'Preparing Dispatch',
-      description:
-        'Our Ibadan studio is packing your bottles and confirming waybill routing.',
+      description: lookupView
+        ? 'Order is being prepared for dispatch.'
+        : 'Our Ibadan studio is packing your bottles and confirming waybill routing.',
       icon: Package,
     },
     shipped: {
       label: 'Shipped',
-      description: 'Your parcel has left our Ibadan studio for your destination.',
+      description: lookupView
+        ? 'Order has been shipped.'
+        : 'Your parcel has left our Ibadan studio for your destination.',
       icon: Truck,
     },
   };
@@ -54,14 +68,16 @@ export function OrderReceiptCard({
   order,
   showScreenshotPrompt = false,
   hideWhatsappButton = false,
+  lookupView = false,
 }: {
   order: Order;
   showScreenshotPrompt?: boolean;
   hideWhatsappButton?: boolean;
+  lookupView?: boolean;
 }) {
   const [copiedOrderNum, setCopiedOrderNum] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-  const statusMeta = getStatusMeta(order);
+  const statusMeta = getStatusMeta(order, lookupView);
   const StatusIcon = statusMeta.icon;
   const isOpay = order.paymentMethod === 'opay';
 
@@ -115,23 +131,33 @@ export function OrderReceiptCard({
             </button>
           </div>
           <p className="text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
-            Thank you, {order.customer.fullName}. {statusMeta.description}
+            {lookupView
+              ? `${order.customer.fullName} · ${statusMeta.description}`
+              : `Thank you, ${order.customer.fullName}. ${statusMeta.description}`}
           </p>
-          {showScreenshotPrompt && (
+          {showScreenshotPrompt && !lookupView && (
             <p className="text-xs font-bold uppercase tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
               Screenshot this placed order receipt and send to WhatsApp {storeConfig.opay.whatsappNumber}.
             </p>
           )}
         </div>
 
-        <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-xs font-semibold whitespace-nowrap self-start">
-          <StatusIcon className="w-4 h-4 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
-          <span>{statusMeta.label}</span>
+        <div className="flex flex-wrap items-center gap-2 self-start">
+          {lookupView && order.verificationCode && (
+            <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-[#B85C38]/35 bg-[#B85C38]/10 text-xs font-bold uppercase tracking-wider text-[#1C1410] dark:text-[#F3EBDF] whitespace-nowrap">
+              <span className="text-[#B85C38] dark:text-[#C6A36A]">Code:</span>
+              <span className="font-mono-num text-sm">{order.verificationCode}</span>
+            </div>
+          )}
+          <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] text-xs font-semibold whitespace-nowrap">
+            <StatusIcon className="w-4 h-4 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
+            <span>{statusMeta.label}</span>
+          </div>
         </div>
       </div>
 
-      {/* 4-Letter Verification Code & Strict WhatsApp Screenshot Requirement (Manual OPay Orders) */}
-      {(isOpay || order.verificationCode) && (
+      {/* 4-Letter Verification Code & Strict WhatsApp Screenshot Requirement (Customer Receipt Only) */}
+      {(isOpay || order.verificationCode) && !lookupView && (
         <div className="rounded-xl border-2 border-[#B85C38] bg-[#B85C38]/10 dark:bg-[#B85C38]/15 p-5 sm:p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">
@@ -235,11 +261,19 @@ export function OrderReceiptCard({
         <div className="rounded-lg bg-[#F3EBDF] dark:bg-[#14100D] p-4 space-y-1.5 sm:col-span-2 lg:col-span-1">
           <p className="font-semibold text-[#1C1410] dark:text-[#F3EBDF]">Payment &amp; Date</p>
           <p className="font-semibold text-[#1C1410] dark:text-[#F3EBDF]">{order.paymentChannel}</p>
+          <p className="font-mono-num text-[#1C1410] dark:text-[#F3EBDF]">
+            Order Number: <span className="font-semibold">{order.orderNumber}</span>
+          </p>
+          {order.verificationCode && (
+            <p className="font-mono-num text-[#B85C38] dark:text-[#C6A36A] font-bold uppercase">
+              Code Number: {order.verificationCode}
+            </p>
+          )}
           <p className="font-mono-num text-[#5C4E45] dark:text-[#B8AA9B] break-all">
             Ref: {order.paymentReference}
           </p>
           <p className="text-[#5C4E45] dark:text-[#B8AA9B]">
-            Date: {new Date(order.createdAt).toLocaleString('en-NG')}
+            Time &amp; Date: {new Date(order.createdAt).toLocaleString('en-NG')}
           </p>
         </div>
       </div>
@@ -314,18 +348,22 @@ export function OrderReceiptCard({
           <Mail className="w-4 h-4 text-[#3D5344] dark:text-[#8FB49B] shrink-0 mt-0.5" aria-hidden="true" />
           <div className="space-y-0.5">
             <p className="text-[#1C1410] dark:text-[#F3EBDF] font-medium">
-              {order.emailFeedback?.customerNotified && order.emailFeedback?.ownerNotified
-                ? `Confirmation receipt sent to ${order.customer.email} and store owner (${storeConfig.email}).`
-                : isOpay
-                  ? `Order receipt recorded for ${order.customer.email}. Remember to send your screenshot & 4-letter code to WhatsApp ${storeConfig.opay.whatsappNumber}.`
-                  : `Receipt details recorded for ${order.customer.email} & store owner (${storeConfig.email}).`}
+              {lookupView
+                ? `Order ${order.orderNumber}${order.verificationCode ? ` · Code ${order.verificationCode}` : ''} · ${new Date(order.createdAt).toLocaleString('en-NG')}`
+                : order.emailFeedback?.customerNotified && order.emailFeedback?.ownerNotified
+                  ? `Confirmation receipt sent to ${order.customer.email} and store owner (${storeConfig.email}).`
+                  : isOpay
+                    ? `Order receipt recorded for ${order.customer.email}. Remember to send your screenshot & 4-letter code to WhatsApp ${storeConfig.opay.whatsappNumber}.`
+                    : `Receipt details recorded for ${order.customer.email} & store owner (${storeConfig.email}).`}
             </p>
-            <p>
-              Questions? Contact{' '}
-              <a href={`mailto:${storeConfig.email}`} className="underline">
-                {storeConfig.email}
-              </a>
-            </p>
+            {!lookupView && (
+              <p>
+                Questions? Contact{' '}
+                <a href={`mailto:${storeConfig.email}`} className="underline">
+                  {storeConfig.email}
+                </a>
+              </p>
+            )}
           </div>
         </div>
 
