@@ -8,13 +8,15 @@ export const storeConfig = {
   location: 'Ibadan, Oyo State, Nigeria',
   fulfilmentScope: 'Crafted in Ibadan · Shipped nationwide across Nigeria',
   opay: {
-    enabled: false,
-    bankName: 'OPay',
-    accountName: 'Bev Naturals Cosmetics',
+    enabled: true,
+    bankName: 'OPAY',
+    accountName: 'BEV NATURALS COSMETICS',
     accountNumber: '6419555143',
+    whatsappNumber: '09019964862',
+    whatsappLink: 'https://wa.me/message/EWPWCPFTETH5J1',
   },
   paystack: {
-    enabled: true,
+    enabled: false,
     currency: 'NGN',
   },
 } as const;

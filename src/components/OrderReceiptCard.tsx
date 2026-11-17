@@ -1,45 +1,69 @@
 import { useState } from 'react';
-import { Check, CheckCircle2, Clock, Copy, Mail, Package, Printer, Truck } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Clock,
+  Copy,
+  ExternalLink,
+  Mail,
+  Package,
+  Printer,
+  Truck,
+} from 'lucide-react';
 import { formatNgn } from '../lib/catalog';
 import { storeConfig } from '../lib/store-config';
 import type { Order, OrderStatus } from '../lib/types';
 
-const STATUS_META: Record<
-  OrderStatus,
-  { label: string; description: string; icon: typeof Clock }
-> = {
-  awaiting_payment: {
-    label: 'Awaiting Payment',
-    description: 'Complete your Paystack payment to queue your order for packing.',
-    icon: Clock,
-  },
-  paid: {
-    label: 'Payment Confirmed',
-    description: 'Your Paystack payment is verified and queued for fresh batch packing in Ibadan.',
-    icon: CheckCircle2,
-  },
-  preparing: {
-    label: 'Preparing Dispatch',
-    description: 'Our Ibadan studio is packing your bottles and confirming waybill routing.',
-    icon: Package,
-  },
-  shipped: {
-    label: 'Shipped',
-    description: 'Your parcel has left our Ibadan studio for your destination.',
-    icon: Truck,
-  },
-};
+function getStatusMeta(order: Order): {
+  label: string;
+  description: string;
+  icon: typeof Clock;
+} {
+  const isOpay = order.paymentMethod === 'opay';
+  const map: Record<OrderStatus, { label: string; description: string; icon: typeof Clock }> = {
+    awaiting_payment: {
+      label: isOpay ? 'Transfer Submitted · Verify on WhatsApp' : 'Awaiting Payment',
+      description: isOpay
+        ? `Send a screenshot of this placed order and your 4-letter verification code to WhatsApp ${storeConfig.opay.whatsappNumber}.`
+        : 'Complete your payment to queue your order for packing.',
+      icon: Clock,
+    },
+    paid: {
+      label: 'Payment Confirmed',
+      description:
+        'Your payment is verified and queued for fresh batch packing in Ibadan.',
+      icon: CheckCircle2,
+    },
+    preparing: {
+      label: 'Preparing Dispatch',
+      description:
+        'Our Ibadan studio is packing your bottles and confirming waybill routing.',
+      icon: Package,
+    },
+    shipped: {
+      label: 'Shipped',
+      description: 'Your parcel has left our Ibadan studio for your destination.',
+      icon: Truck,
+    },
+  };
+  return map[order.status];
+}
 
 export function OrderReceiptCard({
   order,
   showScreenshotPrompt = false,
+  hideWhatsappButton = false,
 }: {
   order: Order;
   showScreenshotPrompt?: boolean;
+  hideWhatsappButton?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
-  const statusMeta = STATUS_META[order.status];
+  const [copiedOrderNum, setCopiedOrderNum] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const statusMeta = getStatusMeta(order);
   const StatusIcon = statusMeta.icon;
+  const isOpay = order.paymentMethod === 'opay';
 
   const payable =
     order.totalNgn ??
@@ -48,8 +72,19 @@ export function OrderReceiptCard({
   const handleCopyOrderNumber = async () => {
     try {
       await navigator.clipboard.writeText(order.orderNumber);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      setCopiedOrderNum(true);
+      setTimeout(() => setCopiedOrderNum(false), 1800);
+    } catch {
+      // ignore clipboard restrictions
+    }
+  };
+
+  const handleCopyVerificationCode = async () => {
+    if (!order.verificationCode) return;
+    try {
+      await navigator.clipboard.writeText(order.verificationCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 1800);
     } catch {
       // ignore clipboard restrictions
     }
@@ -71,16 +106,20 @@ export function OrderReceiptCard({
               onClick={handleCopyOrderNumber}
               className="print:hidden inline-flex items-center gap-1.5 min-h-[34px] px-3 py-1 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-xs font-medium hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 cursor-pointer"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-[#3D5344]" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? 'Copied' : 'Copy Number'}</span>
+              {copiedOrderNum ? (
+                <Check className="w-3.5 h-3.5 text-[#3D5344]" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              <span>{copiedOrderNum ? 'Copied' : 'Copy Number'}</span>
             </button>
           </div>
           <p className="text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
             Thank you, {order.customer.fullName}. {statusMeta.description}
           </p>
           {showScreenshotPrompt && (
-            <p className="text-xs font-medium text-[#3D5344] dark:text-[#8FB49B]">
-              Screenshot or save this page — keep your Order Number for Order Lookup anytime.
+            <p className="text-xs font-bold uppercase tracking-wide text-[#B85C38] dark:text-[#C6A36A]">
+              Screenshot this placed order receipt and send to WhatsApp {storeConfig.opay.whatsappNumber}.
             </p>
           )}
         </div>
@@ -90,6 +129,76 @@ export function OrderReceiptCard({
           <span>{statusMeta.label}</span>
         </div>
       </div>
+
+      {/* 4-Letter Verification Code & Strict WhatsApp Screenshot Requirement (Manual OPay Orders) */}
+      {(isOpay || order.verificationCode) && (
+        <div className="rounded-xl border-2 border-[#B85C38] bg-[#B85C38]/10 dark:bg-[#B85C38]/15 p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-xs font-bold uppercase tracking-wider text-[#B85C38] dark:text-[#C6A36A]">
+                Your 4-Letter Payment Verification Code
+              </p>
+              <div className="flex items-center gap-3">
+                <span className="font-mono-num text-3xl sm:text-4xl font-bold tracking-[0.28em] text-[#1C1410] dark:text-[#F3EBDF] uppercase">
+                  {order.verificationCode || '—'}
+                </span>
+                {order.verificationCode && (
+                  <button
+                    type="button"
+                    onClick={handleCopyVerificationCode}
+                    className="print:hidden inline-flex items-center gap-1.5 min-h-[34px] px-3 py-1 rounded-lg border border-[#1C1410]/20 dark:border-[#F3EBDF]/20 bg-[#FAF5EE] dark:bg-[#1E1814] text-xs font-semibold cursor-pointer"
+                  >
+                    {copiedCode ? (
+                      <Check className="w-3.5 h-3.5 text-[#3D5344]" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    <span>{copiedCode ? 'Copied' : 'Copy Code'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-[#FAF5EE] dark:bg-[#14100D] border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 px-4 py-3 text-xs space-y-0.5 font-bold uppercase tracking-wide text-[#1C1410] dark:text-[#F3EBDF]">
+              <p className="font-mono-num text-sm">{storeConfig.opay.accountNumber}</p>
+              <p>{storeConfig.opay.bankName}</p>
+              <p>{storeConfig.opay.accountName}</p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2.5 text-xs sm:text-sm font-bold text-[#1C1410] dark:text-[#F3EBDF] pt-2 border-t border-[#B85C38]/25">
+            <AlertTriangle className="w-5 h-5 text-[#B85C38] dark:text-[#C6A36A] shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="leading-relaxed">
+              <span className="font-extrabold uppercase">STRICT INSTRUCTION:</span> SEND YOUR PAYMENT PROOF (SCREENSHOT OF THIS PLACED ORDER) AND YOUR 4-LETTER VERIFICATION CODE{' '}
+              <span className="font-mono-num font-extrabold uppercase underline">
+                ({order.verificationCode || 'CODE'})
+              </span>{' '}
+              TO WHATSAPP NUMBER{' '}
+              <span className="font-mono-num font-extrabold underline">
+                {storeConfig.opay.whatsappNumber}
+              </span>{' '}
+              IMMEDIATELY TO CONFIRM YOUR ORDER.
+            </p>
+          </div>
+
+          {!hideWhatsappButton && (
+            <div className="print:hidden pt-1 flex flex-wrap items-center gap-3">
+              <a
+                href={storeConfig.opay.whatsappLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 min-h-[44px] px-5 py-2.5 rounded-lg bg-[#059669] hover:bg-[#047857] text-[#FFFFFF] ring-2 ring-[#10B981]/50 shadow-sm text-xs sm:text-sm font-extrabold tracking-wide transition-colors"
+              >
+                <span>Click this</span>
+                <ExternalLink className="w-4 h-4" aria-hidden="true" />
+              </a>
+              <span className="text-xs font-bold text-[#1C1410] dark:text-[#F3EBDF]">
+                Redirects straight to WhatsApp ({storeConfig.opay.whatsappNumber}) to send your proof &amp; code
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Full Customer & Delivery Details for Screenshot & Records */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 pb-6 border-b border-[#1C1410]/10 dark:border-[#F3EBDF]/10 text-xs">
@@ -124,8 +233,8 @@ export function OrderReceiptCard({
         </div>
 
         <div className="rounded-lg bg-[#F3EBDF] dark:bg-[#14100D] p-4 space-y-1.5 sm:col-span-2 lg:col-span-1">
-          <p className="font-semibold text-[#1C1410] dark:text-[#F3EBDF]">Payment & Date</p>
-          <p className="text-[#1C1410] dark:text-[#F3EBDF]">{order.paymentChannel}</p>
+          <p className="font-semibold text-[#1C1410] dark:text-[#F3EBDF]">Payment &amp; Date</p>
+          <p className="font-semibold text-[#1C1410] dark:text-[#F3EBDF]">{order.paymentChannel}</p>
           <p className="font-mono-num text-[#5C4E45] dark:text-[#B8AA9B] break-all">
             Ref: {order.paymentReference}
           </p>
@@ -163,7 +272,7 @@ export function OrderReceiptCard({
           </ul>
         ) : (
           <p className="text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
-            Paystack transaction verified ({order.paymentReference}).
+            Verified order transaction ({order.paymentReference}).
           </p>
         )}
 
@@ -191,7 +300,9 @@ export function OrderReceiptCard({
             </span>
           </div>
           <div className="flex justify-between pt-2 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10">
-            <span className="font-semibold">Total Paid on Paystack</span>
+            <span className="font-semibold">
+              {isOpay ? 'Total Transferred (OPay)' : 'Total Paid on Paystack'}
+            </span>
             <span className="font-mono-num text-base font-semibold">{formatNgn(payable)}</span>
           </div>
         </div>
@@ -205,7 +316,9 @@ export function OrderReceiptCard({
             <p className="text-[#1C1410] dark:text-[#F3EBDF] font-medium">
               {order.emailFeedback?.customerNotified && order.emailFeedback?.ownerNotified
                 ? `Confirmation receipt sent to ${order.customer.email} and store owner (${storeConfig.email}).`
-                : `Paystack receipt details recorded for ${order.customer.email} & store owner (${storeConfig.email}).`}
+                : isOpay
+                  ? `Order receipt recorded for ${order.customer.email}. Remember to send your screenshot & 4-letter code to WhatsApp ${storeConfig.opay.whatsappNumber}.`
+                  : `Receipt details recorded for ${order.customer.email} & store owner (${storeConfig.email}).`}
             </p>
             <p>
               Questions? Contact{' '}

@@ -72,10 +72,20 @@ export function generateOrderNumber(existingCount: number): string {
   return `BN-${seq}-${suffix}`;
 }
 
+export function generateVerificationCode(): string {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let code = '';
+  for (let i = 0; i < 4; i += 1) {
+    code += letters[crypto.randomInt(0, letters.length)];
+  }
+  return code;
+}
+
 export interface CreateOrderInput {
   paymentMethod: PaymentMethod;
   paymentReference: string;
   paymentChannel: string;
+  verificationCode?: string;
   customer: Order['customer'];
   shipping: Order['shipping'];
   items: OrderLineItem[];
@@ -108,6 +118,7 @@ export async function createOrderRecord(input: CreateOrderInput): Promise<Order>
       totalNgn: input.totalNgn,
       deliveryFeeNgn: input.deliveryFeeNgn,
       studioNote: '',
+      ...(input.verificationCode ? { verificationCode: input.verificationCode } : {}),
     };
     orders.unshift(order);
     await writeOrders(orders);

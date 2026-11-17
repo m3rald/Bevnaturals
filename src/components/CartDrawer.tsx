@@ -153,11 +153,11 @@ export function CartDrawer() {
             )}
             {promoSnapshot.phase === 'upcoming' && (
               <p className="text-xs text-[#B85C38] dark:text-[#C6A36A]">
-                10% off unlocks Mon 16 Nov, 1:00 AM WAT and applies automatically before Paystack payment.
+                10% off unlocks Mon 16 Nov, 1:00 AM WAT and applies automatically before payment.
               </p>
             )}
             <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
-              Regional Nigerian shipping (from ₦0 Ibadan pickup) is added at checkout before Paystack payment.
+              Regional Nigerian shipping (from ₦0 Ibadan pickup) is added at checkout before payment.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <button

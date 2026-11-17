@@ -224,7 +224,7 @@ export function ProductPage({ slug }: { slug: string }) {
                 Fulfilment & Payment
               </h2>
               <p className="mt-1.5 text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
-                Dispatched from Ibadan across all Nigerian regions. Regional pick up or doorstep shipping is added at checkout and paid via Paystack.
+                Dispatched from Ibadan across all Nigerian regions. Regional pick up or doorstep shipping is added at checkout.
               </p>
             </div>
           </div>

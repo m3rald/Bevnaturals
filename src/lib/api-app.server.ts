@@ -21,6 +21,7 @@ import {
   createOrderRecord,
   findOrderByNumber,
   findOrderByPaymentReference,
+  generateVerificationCode,
   markOrderPaidByReference,
   readOrders,
   setOrderEmailFeedback,
@@ -79,9 +80,11 @@ export function createApiApp(): express.Express {
         bankName: storeConfig.opay.bankName,
         accountName: storeConfig.opay.accountName,
         accountNumber: storeConfig.opay.accountNumber,
+        whatsappNumber: storeConfig.opay.whatsappNumber,
+        whatsappLink: storeConfig.opay.whatsappLink,
       },
       paystack: {
-        enabled: storeConfig.paystack.enabled,
+        enabled: storeConfig.paystack.enabled && Boolean(paystackSecret),
         mode: paystackSecret ? 'live' : 'sandbox',
         publicKey: getPaystackPublicKey(),
       },
@@ -99,6 +102,7 @@ export function createApiApp(): express.Express {
     try {
       const body = req.body as {
         paymentMethod?: PaymentMethod;
+        paymentConfirmed?: boolean;
         opaySenderName?: string;
         customer?: { fullName?: string; email?: string; phone?: string };
         shipping?: {
@@ -113,10 +117,21 @@ export function createApiApp(): express.Express {
       };
 
       const paymentMethod: PaymentMethod =
-        body.paymentMethod === 'opay' && storeConfig.opay.enabled ? 'opay' : 'paystack';
+        body.paymentMethod === 'paystack'
+          ? 'paystack'
+          : storeConfig.opay.enabled
+            ? 'opay'
+            : 'paystack';
 
-      if (body.paymentMethod === 'opay' && !storeConfig.opay.enabled) {
-        res.status(400).json({ error: 'This payment option is currently unavailable. Please use Paystack.' });
+      if (paymentMethod === 'opay' && !storeConfig.opay.enabled) {
+        res.status(400).json({ error: 'Manual OPay transfer is currently unavailable.' });
+        return;
+      }
+
+      if (paymentMethod === 'opay' && body.paymentConfirmed !== true) {
+        res.status(400).json({
+          error: 'Please complete the 60-second transfer wait and tick the Payment Made box before confirming.',
+        });
         return;
       }
 
@@ -176,21 +191,23 @@ export function createApiApp(): express.Express {
         paymentMethod === 'paystack' ? `BN-PS-${Date.now()}-${refSuffix}` : `BN-OP-${Date.now()}-${refSuffix}`;
 
       const opaySender = body.opaySenderName?.trim();
+      const verificationCode = paymentMethod === 'opay' ? generateVerificationCode() : undefined;
       const paymentChannel =
         paymentMethod === 'opay'
           ? opaySender
-            ? `OPay Transfer (${opaySender})`
-            : 'OPay Transfer · 6419555143'
+            ? `OPAY TRANSFER (${opaySender}) · 6419555143`
+            : 'OPAY TRANSFER · 6419555143'
           : 'Paystack Checkout (Pending)';
 
       const promo = calculatePromoDiscount(subtotalNgn, new Date());
       const deliveryFeeNgn = shippingQuote.method.feeNgn;
       const finalPayableNgn = promo.totalNgn + deliveryFeeNgn;
 
-      const order = await createOrderRecord({
+      let order = await createOrderRecord({
         paymentMethod,
         paymentReference,
         paymentChannel,
+        verificationCode,
         customer: { fullName, email, phone },
         shipping: {
           address,
@@ -211,6 +228,11 @@ export function createApiApp(): express.Express {
       });
 
       if (paymentMethod === 'opay') {
+        const feedback = await sendOrderReceiptEmails(order);
+        order = (await setOrderEmailFeedback(order.orderNumber, feedback)) || {
+          ...order,
+          emailFeedback: feedback,
+        };
         res.status(201).json({ order });
         return;
       }
@@ -513,7 +535,7 @@ export function createApiApp(): express.Express {
       const byKey = new Map<string, Order>();
 
       for (const ord of localOrders) {
-        if (ord.status !== 'awaiting_payment') {
+        if (ord.status !== 'awaiting_payment' || ord.paymentMethod === 'opay') {
           byKey.set(ord.paymentReference || ord.orderNumber, ord);
         }
       }

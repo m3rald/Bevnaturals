@@ -13,7 +13,7 @@ export function ShippingPage() {
           Nigeria Regional Shipping Rates
         </h1>
         <p className="text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
-          Every Nigerian state is listed under its region below. Your selected shipping fee is added at checkout and paid in full alongside your Paystack order total (promotional discounts apply strictly to products).
+          Every Nigerian state is listed under its region below. Your selected shipping fee is added at checkout and paid in full alongside your order total (promotional discounts apply strictly to products).
         </p>
       </div>
 

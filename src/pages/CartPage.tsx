@@ -19,7 +19,7 @@ export function CartPage() {
           Shopping Bag
         </h1>
         <p className="text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
-          Review your hair treatment selections before continuing to Paystack checkout.
+          Review your hair treatment selections before continuing to checkout.
         </p>
       </div>
 

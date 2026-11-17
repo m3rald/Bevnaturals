@@ -87,12 +87,13 @@ export interface Order {
   totalNgn?: number;
   deliveryFeeNgn: number | null;
   studioNote: string;
+  verificationCode?: string;
   source?: 'store' | 'paystack';
   emailFeedback?: {
     sentAt?: string;
     customerNotified: boolean;
     ownerNotified: boolean;
-    channel: 'smtp' | 'resend' | 'paystack_receipt';
+    channel: 'smtp' | 'resend' | 'paystack_receipt' | 'manual_transfer';
   };
 }
 
@@ -105,6 +106,8 @@ export interface PublicStoreConfig {
     bankName: string;
     accountName: string;
     accountNumber: string;
+    whatsappNumber?: string;
+    whatsappLink?: string;
   };
   paystack: {
     enabled: boolean;

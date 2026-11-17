@@ -56,15 +56,20 @@ function buildOrderEmailContent(order: Order): {
           .join('')
       : `<tr><td colspan="2" style="padding:8px 0;color:#5C4E45;">Paystack verified order purchase</td></tr>`;
 
-  const subject = `Bev Naturals Order Confirmation · ${order.orderNumber}`;
+  const isOpay = order.paymentMethod === 'opay';
+  const subject = `Bev Naturals Order ${isOpay ? 'Placed' : 'Confirmation'} · ${order.orderNumber}`;
 
   const text = [
-    `BEV NATURALS COSMETICS — ORDER CONFIRMATION`,
+    `BEV NATURALS COSMETICS — ORDER ${isOpay ? 'RECEIPT (OPAY TRANSFER)' : 'CONFIRMATION'}`,
     ``,
     `Order Number: ${order.orderNumber}`,
+    order.verificationCode ? `4-Letter Verification Code: ${order.verificationCode}` : '',
     `Order Date: ${new Date(order.createdAt).toLocaleString('en-NG')}`,
     `Payment Status: ${order.status.toUpperCase()} (${order.paymentChannel})`,
-    `Paystack Reference: ${order.paymentReference}`,
+    `Payment Reference: ${order.paymentReference}`,
+    isOpay
+      ? `WhatsApp Screenshot Verification: Send screenshot + code ${order.verificationCode || ''} to ${storeConfig.opay.whatsappNumber}`
+      : '',
     ``,
     `CUSTOMER DETAILS`,
     `Full Name: ${order.customer.fullName}`,
@@ -86,7 +91,7 @@ function buildOrderEmailContent(order: Order): {
       ? `${order.discountLabel || '10% Promo Discount'}: -${formatNgn(order.discountNgn ?? 0)}`
       : '',
     `Shipping Fee: ${formatNgn(order.deliveryFeeNgn ?? 0)}`,
-    `Total Paid on Paystack: ${formatNgn(payable)}`,
+    `${isOpay ? 'Total Transferred (OPay)' : 'Total Paid on Paystack'}: ${formatNgn(payable)}`,
     ``,
     `Store Contact: ${storeConfig.email} · Ibadan, Oyo State, Nigeria`,
   ]
@@ -100,12 +105,24 @@ function buildOrderEmailContent(order: Order): {
           Bev Naturals Cosmetics · Ibadan, Nigeria
         </p>
         <h1 style="margin:0 0 8px;font-size:24px;color:#1C1410;">
-          Order Confirmed: ${escapeHtml(order.orderNumber)}
+          Order ${isOpay ? 'Placed' : 'Confirmed'}: ${escapeHtml(order.orderNumber)}
         </h1>
-        <p style="margin:0 0 20px;font-size:14px;color:#5C4E45;">
-          Payment verified via <strong>${escapeHtml(order.paymentChannel)}</strong> · Ref:
+        <p style="margin:0 0 12px;font-size:14px;color:#5C4E45;">
+          Channel: <strong>${escapeHtml(order.paymentChannel)}</strong> · Ref:
           <span style="font-family:monospace;">${escapeHtml(order.paymentReference)}</span>
         </p>
+        ${
+          order.verificationCode
+            ? `<div style="margin:0 0 18px;padding:12px 14px;background:#F3EBDF;border:1px solid #B85C38;border-radius:8px;font-size:13px;">
+                <strong>4-LETTER VERIFICATION CODE: <span style="font-family:monospace;font-size:16px;letter-spacing:0.18em;">${escapeHtml(
+                  order.verificationCode
+                )}</span></strong><br/>
+                Send screenshot of this order + code to WhatsApp <strong>${escapeHtml(
+                  storeConfig.opay.whatsappNumber
+                )}</strong>.
+              </div>`
+            : ''
+        }
 
         <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;">
           <tr>
@@ -162,7 +179,7 @@ function buildOrderEmailContent(order: Order): {
             <strong>${formatNgn(order.deliveryFeeNgn ?? 0)}</strong>
           </div>
           <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid #DFD4C4;font-size:16px;">
-            <strong>Total Paid on Paystack</strong>
+            <strong>${isOpay ? 'Total Transferred (OPay)' : 'Total Paid on Paystack'}</strong>
             <strong>${formatNgn(payable)}</strong>
           </div>
         </div>
@@ -287,6 +304,6 @@ export async function sendOrderReceiptEmails(
   return {
     customerNotified: false,
     ownerNotified: false,
-    channel: 'paystack_receipt',
+    channel: order.paymentMethod === 'opay' ? 'manual_transfer' : 'paystack_receipt',
   };
 }

@@ -9,7 +9,7 @@ const FAQS = [
   },
   {
     q: 'Which payment methods are supported?',
-    a: 'All orders are processed securely through Paystack using Visa, Mastercard, Verve, Bank Transfer, or USSD with instant confirmation.',
+    a: `All orders are paid via direct bank transfer to ${storeConfig.opay.accountNumber} (${storeConfig.opay.bankName} · ${storeConfig.opay.accountName}). After your 60-second transfer confirmation and placing the order, send a screenshot of your placed order and your 4-letter verification code to WhatsApp ${storeConfig.opay.whatsappNumber}.`,
   },
   {
     q: 'How are shipping fees calculated across Nigeria?',
@@ -17,7 +17,7 @@ const FAQS = [
   },
   {
     q: 'Does the 10% timed promotion apply to shipping fees?',
-    a: 'No. When the 10% appreciation window is active, the 10% discount is deducted strictly from your product subtotal. Shipping fees are independent and paid in full alongside your Paystack checkout total.',
+    a: 'No. When the 10% appreciation window is active, the 10% discount is deducted strictly from your product subtotal. Shipping fees are independent and paid in full alongside your checkout total.',
   },
   {
     q: 'Are Kiddies session products safe for children?',

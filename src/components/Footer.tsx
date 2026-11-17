@@ -62,7 +62,7 @@ export function Footer() {
 
         <div className="mt-10 pt-6 border-t border-[#1C1410]/10 dark:border-[#F3EBDF]/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <p className="text-xs text-[#5C4E45] dark:text-[#B8AA9B]">
-            © {new Date().getFullYear()} {storeConfig.brandName}. Ibadan, Nigeria · Secured by Paystack.
+            © {new Date().getFullYear()} {storeConfig.brandName}. Ibadan, Nigeria · Direct Bank Transfer &amp; WhatsApp Verification.
           </p>
         </div>
       </div>

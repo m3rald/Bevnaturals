@@ -49,7 +49,7 @@ export function PromoCountdownCard({ variant = 'frontal' }: { variant?: 'frontal
         <p className="text-xs leading-relaxed text-[#5C4E45] dark:text-[#B8AA9B]">
           {isUpcoming
             ? `Unlocks Mon 16 Nov, 1:00 AM until Sun 22 Nov, 1:00 AM (WAT). ${PROMO_CONFIG.awarenessBody}`
-            : `Every product ordered before Sun 22 Nov, 1:00 AM (WAT) automatically gets 10% deducted at checkout before Paystack payment.`}
+            : `Every product ordered before Sun 22 Nov, 1:00 AM (WAT) automatically gets 10% deducted at checkout before payment.`}
         </p>
       </div>
     );
