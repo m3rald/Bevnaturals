@@ -28,6 +28,7 @@ import { useStore } from '../lib/cart-context';
 import { Link, useRouter } from '../lib/router';
 import { OrderReceiptCard } from '../components/OrderReceiptCard';
 import { PromoCountdownCard, useLivePromoSnapshot } from '../components/PromoCountdownCard';
+import { saveManualOrderToCache } from '../lib/manual-history-cache';
 import type { Order } from '../lib/types';
 
 interface PaystackV2Instance {
@@ -282,6 +283,43 @@ export function CheckoutPage() {
 
   // Phase 4 & Phase 5: Sequential post-confirmation screens (Copy 4-letter code -> Link to Submit Proof + Receipt)
   if (completedOrder && (manualPhase === 'copy_code' || manualPhase === 'submit_proof')) {
+    const syncManualCodeCopied = async (advancePhase: boolean) => {
+      const locallySavedOrder: Order = {
+        ...completedOrder,
+        codeCopiedAt: completedOrder.codeCopiedAt || new Date().toISOString(),
+      };
+      saveManualOrderToCache(locallySavedOrder);
+      setCompletedOrder(locallySavedOrder);
+
+      try {
+        const res = await fetch(
+          `/api/orders/${encodeURIComponent(completedOrder.orderNumber)}/copy-code`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              verificationCode: completedOrder.verificationCode,
+              order: locallySavedOrder,
+            }),
+          }
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { order?: Order };
+          if (data.order) {
+            saveManualOrderToCache(data.order);
+            setCompletedOrder(data.order);
+          }
+        }
+      } catch {
+        // non-blocking network safety; local archive retains order for Lookup sync
+      }
+
+      if (advancePhase) {
+        setManualPhase('submit_proof');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+
     const handleCopyFourLetterCode = async () => {
       if (completedOrder.verificationCode) {
         try {
@@ -290,26 +328,7 @@ export function CheckoutPage() {
           // clipboard may be restricted in embedded views; still record & unlock proof step
         }
       }
-      try {
-        const res = await fetch(
-          `/api/orders/${encodeURIComponent(completedOrder.orderNumber)}/copy-code`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ verificationCode: completedOrder.verificationCode }),
-          }
-        );
-        if (res.ok) {
-          const data = (await res.json()) as { order?: Order };
-          if (data.order) {
-            setCompletedOrder(data.order);
-          }
-        }
-      } catch {
-        // non-blocking network safety; proof submission remains accessible
-      }
-      setManualPhase('submit_proof');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      await syncManualCodeCopied(true);
     };
 
     return (
@@ -337,7 +356,12 @@ export function CheckoutPage() {
               </p>
             </div>
 
-            <div className="rounded-xl border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] py-6 px-4">
+            <div
+              onCopy={() => {
+                void syncManualCodeCopied(false);
+              }}
+              className="rounded-xl border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 bg-[#F3EBDF] dark:bg-[#14100D] py-6 px-4 select-all"
+            >
               <span className="font-mono-num text-5xl font-extrabold tracking-[0.35em] text-[#1C1410] dark:text-[#F3EBDF] uppercase">
                 {completedOrder.verificationCode || '—'}
               </span>

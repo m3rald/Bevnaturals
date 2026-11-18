@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Lock, RefreshCw, Search } from 'lucide-react';
+import { Eye, EyeOff, Lock, RefreshCw, Search } from 'lucide-react';
 import { formatNgn } from '../lib/catalog';
+import {
+  getCachedManualOrders,
+  mergeCachedManualOrders,
+  saveManualOrderToCache,
+} from '../lib/manual-history-cache';
 import { OrderReceiptCard } from '../components/OrderReceiptCard';
 import type { Order } from '../lib/types';
 
@@ -28,7 +33,6 @@ export function OrderLookupPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [historySection, setHistorySection] = useState<HistorySectionTab>('all');
   const [historyOrders, setHistoryOrders] = useState<Order[]>([]);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [historyFilter, setHistoryFilter] = useState('');
@@ -45,7 +49,6 @@ export function OrderLookupPage() {
     setShowHistory(false);
     setHistorySection('all');
     setHistoryOrders([]);
-    setHistoryLoaded(false);
     setLookupError('');
     setHistoryError('');
     setPinError(message);
@@ -89,6 +92,12 @@ export function OrderLookupPage() {
     if (!token) return;
     setLoadingHistory(true);
     setHistoryError('');
+
+    const cachedBefore = getCachedManualOrders();
+    if (cachedBefore.length > 0 && historyOrders.length === 0) {
+      setHistoryOrders(cachedBefore);
+    }
+
     try {
       const res = await fetch('/api/orders-history', {
         headers: { Authorization: `Bearer ${token}` },
@@ -101,20 +110,54 @@ export function OrderLookupPage() {
       if (!res.ok || !Array.isArray(data.orders)) {
         throw new Error(data.error || 'Unable to load order history.');
       }
-      setHistoryOrders(data.orders);
-      setHistoryLoaded(true);
+
+      const { cachedManual, missingOnServer } = mergeCachedManualOrders(data.orders);
+
+      if (missingOnServer.length > 0) {
+        try {
+          await fetch('/api/orders-history/sync', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ orders: missingOnServer }),
+          });
+        } catch {
+          // Non-fatal; cachedManual still renders locally
+        }
+      }
+
+      const onlineServer = data.orders.filter((ord) => ord.paymentMethod !== 'opay');
+      const byKey = new Map<string, Order>();
+      for (const ord of cachedManual) {
+        byKey.set(ord.orderNumber.toUpperCase(), ord);
+      }
+      for (const ord of onlineServer) {
+        byKey.set((ord.paymentReference || ord.orderNumber).toUpperCase(), ord);
+      }
+      const combined = Array.from(byKey.values()).sort(
+        (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+      );
+
+      setHistoryOrders(combined);
     } catch (err) {
+      if (cachedBefore.length > 0) {
+        setHistoryOrders((prev) => (prev.length > 0 ? prev : cachedBefore));
+      }
       setHistoryError(err instanceof Error ? err.message : 'Unable to load order history.');
     } finally {
       setLoadingHistory(false);
     }
-  }, [token, handleLock]);
+  }, [token, handleLock, historyOrders.length]);
 
   useEffect(() => {
-    if (token && showHistory && !historyLoaded && !loadingHistory) {
-      loadHistory();
+    if (token && showHistory) {
+      void loadHistory();
     }
-  }, [token, showHistory, historyLoaded, loadingHistory, loadHistory]);
+    // Intentionally re-fetch whenever history is toggled ON so new manual orders appear immediately
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, showHistory]);
 
   const handleLookup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,12 +178,37 @@ export function OrderLookupPage() {
         return;
       }
       const data = (await res.json()) as { order?: Order; error?: string };
-      if (!res.ok || !data.order) {
-        throw new Error(
-          data.error || 'No verified order found for that Order Number or 4-Letter Code.'
-        );
+      if (res.ok && data.order) {
+        if (data.order.paymentMethod === 'opay') {
+          saveManualOrderToCache(data.order);
+        }
+        setSelectedOrder(data.order);
+        return;
       }
-      setSelectedOrder(data.order);
+
+      // Fallback check against local manual archive in case serverless cold start wiped /tmp
+      const upper = q.toUpperCase();
+      const cachedMatch = getCachedManualOrders().find(
+        (ord) =>
+          ord.orderNumber.toUpperCase() === upper ||
+          (ord.verificationCode || '').toUpperCase() === upper
+      );
+      if (cachedMatch) {
+        setSelectedOrder(cachedMatch);
+        void fetch('/api/orders-history/sync', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ orders: [cachedMatch] }),
+        }).catch(() => {});
+        return;
+      }
+
+      throw new Error(
+        data.error || 'No verified order found for that Order Number or 4-Letter Code.'
+      );
     } catch (err) {
       setSelectedOrder(null);
       setLookupError(err instanceof Error ? err.message : 'Unable to look up order.');
@@ -318,6 +386,11 @@ export function OrderLookupPage() {
                   : 'border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-[#5C4E45] dark:text-[#B8AA9B] hover:text-[#1C1410] dark:hover:text-[#F3EBDF]'
               }`}
             >
+              {showHistory ? (
+                <Eye className="w-3.5 h-3.5 text-[#3D5344] dark:text-[#8FB49B]" aria-hidden="true" />
+              ) : (
+                <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
               <span>Order History</span>
               <span
                 aria-hidden="true"
@@ -411,7 +484,7 @@ export function OrderLookupPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               <input
                 type="search"
                 value={historyFilter}
@@ -431,6 +504,14 @@ export function OrderLookupPage() {
                   aria-hidden="true"
                 />
                 <span>Refresh</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowHistory(false)}
+                className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-lg border border-[#1C1410]/15 dark:border-[#F3EBDF]/15 text-xs font-medium hover:bg-[#1C1410]/5 dark:hover:bg-[#F3EBDF]/5 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Hide History</span>
               </button>
             </div>
           </div>
@@ -469,7 +550,7 @@ export function OrderLookupPage() {
             </div>
           )}
 
-          {loadingHistory ? (
+          {loadingHistory && historyOrders.length === 0 ? (
             <div className="py-12 text-center rounded-xl border border-[#1C1410]/10 dark:border-[#F3EBDF]/10 bg-[#FAF5EE] dark:bg-[#1E1814]">
               <p className="text-sm text-[#5C4E45] dark:text-[#B8AA9B]">
                 Loading verified order history…

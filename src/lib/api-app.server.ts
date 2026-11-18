@@ -27,6 +27,7 @@ import {
   readOrders,
   setOrderEmailFeedback,
   updateOrderByNumber,
+  upsertManualOrdersBatch,
   upsertOrderFromPaystack,
 } from './orders.server.ts';
 import type { Order, OrderLineItem, OrderStatus, PaymentMethod, PublicStoreConfig } from './types.ts';
@@ -481,13 +482,17 @@ export function createApiApp(): express.Express {
   app.post('/api/orders/:orderNumber/copy-code', async (req, res) => {
     try {
       const orderNumber = req.params.orderNumber?.trim() || '';
-      const body = req.body as { verificationCode?: string };
+      const body = req.body as { verificationCode?: string; order?: Order };
       if (!orderNumber) {
         res.status(400).json({ error: 'Order number is required.' });
         return;
       }
 
-      const updated = await markOrderCodeCopied(orderNumber, body?.verificationCode);
+      const updated = await markOrderCodeCopied(
+        orderNumber,
+        body?.verificationCode,
+        body?.order
+      );
       if (!updated) {
         res.status(404).json({ error: 'Order not found or verification code mismatch.' });
         return;
@@ -586,6 +591,21 @@ export function createApiApp(): express.Express {
     } catch (err) {
       console.error('Order history error:', err);
       res.status(500).json({ error: 'Unable to load previous purchases right now.' });
+    }
+  });
+
+  app.post('/api/orders-history/sync', requireAdmin, async (req, res) => {
+    try {
+      const body = req.body as { orders?: Order[] };
+      const incoming = Array.isArray(body?.orders) ? body.orders : [];
+      const merged = await upsertManualOrdersBatch(incoming);
+      const manualOnly = merged.filter(
+        (ord) => ord.paymentMethod === 'opay' && Boolean(ord.codeCopiedAt)
+      );
+      res.json({ orders: manualOnly });
+    } catch (err) {
+      console.error('Manual order history sync error:', err);
+      res.status(500).json({ error: 'Unable to sync manual order history.' });
     }
   });
 

@@ -6,9 +6,59 @@ import type { Order, OrderLineItem, OrderStatus, PaymentMethod } from './types.t
 
 const PRIMARY_DATA_DIR = path.resolve(process.cwd(), 'data');
 const FALLBACK_DATA_DIR = path.join(os.tmpdir(), 'bev-naturals-data');
+const KV_ORDERS_KEY = 'bn_orders_v1';
 let activeDataDir = PRIMARY_DATA_DIR;
 
 let writeChain: Promise<void> = Promise.resolve();
+
+function getKvConfig(): { url: string; token: string } | null {
+  const url = (
+    process.env.KV_REST_API_URL ||
+    process.env.UPSTASH_REDIS_REST_URL ||
+    ''
+  ).trim();
+  const token = (
+    process.env.KV_REST_API_TOKEN ||
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    ''
+  ).trim();
+  if (!url || !token) return null;
+  return { url: url.replace(/\/+$/, ''), token };
+}
+
+async function readOrdersFromKv(): Promise<Order[] | null> {
+  const kv = getKvConfig();
+  if (!kv) return null;
+  try {
+    const res = await fetch(`${kv.url}/get/${encodeURIComponent(KV_ORDERS_KEY)}`, {
+      headers: { Authorization: `Bearer ${kv.token}` },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { result?: string | Order[] | null };
+    if (!json || json.result === null || json.result === undefined) return [];
+    const parsed = typeof json.result === 'string' ? JSON.parse(json.result) : json.result;
+    return Array.isArray(parsed) ? (parsed as Order[]) : [];
+  } catch {
+    return null;
+  }
+}
+
+async function writeOrdersToKv(orders: Order[]): Promise<void> {
+  const kv = getKvConfig();
+  if (!kv) return;
+  try {
+    await fetch(`${kv.url}/set/${encodeURIComponent(KV_ORDERS_KEY)}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${kv.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(JSON.stringify(orders)),
+    });
+  } catch {
+    // Non-fatal; disk store remains populated
+  }
+}
 
 function getOrdersFilePath(): string {
   return path.join(activeDataDir, 'orders.json');
@@ -29,7 +79,7 @@ async function ensureStoreFile(): Promise<void> {
   }
 }
 
-export async function readOrders(): Promise<Order[]> {
+async function readOrdersFromDisk(): Promise<Order[]> {
   await ensureStoreFile();
   const raw = await fs.readFile(getOrdersFilePath(), 'utf8');
   try {
@@ -38,6 +88,23 @@ export async function readOrders(): Promise<Order[]> {
   } catch {
     return [];
   }
+}
+
+export async function readOrders(): Promise<Order[]> {
+  const kvOrders = await readOrdersFromKv();
+  const diskOrders = await readOrdersFromDisk();
+  if (kvOrders === null) return diskOrders;
+
+  const byNumber = new Map<string, Order>();
+  for (const ord of diskOrders) {
+    byNumber.set(ord.orderNumber.toUpperCase(), ord);
+  }
+  for (const ord of kvOrders) {
+    byNumber.set(ord.orderNumber.toUpperCase(), ord);
+  }
+  return Array.from(byNumber.values()).sort(
+    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+  );
 }
 
 async function writeOrders(orders: Order[]): Promise<void> {
@@ -55,6 +122,7 @@ async function writeOrders(orders: Order[]): Promise<void> {
     await fs.writeFile(tmpFile, JSON.stringify(orders, null, 2), 'utf8');
     await fs.rename(tmpFile, fallbackFile);
   }
+  await writeOrdersToKv(orders);
 }
 
 function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
@@ -234,13 +302,33 @@ export async function upsertOrderFromPaystack(order: Order): Promise<Order> {
 
 export async function markOrderCodeCopied(
   orderNumber: string,
-  verificationCode?: string
+  verificationCode?: string,
+  fallbackOrder?: Order
 ): Promise<Order | null> {
   return enqueueWrite(async () => {
     const orders = await readOrders();
     const normalized = orderNumber.trim().toUpperCase();
     const idx = orders.findIndex((o) => o.orderNumber.toUpperCase() === normalized);
-    if (idx === -1) return null;
+    const now = new Date().toISOString();
+
+    if (idx === -1) {
+      if (
+        fallbackOrder &&
+        fallbackOrder.orderNumber?.trim().toUpperCase() === normalized &&
+        fallbackOrder.paymentMethod === 'opay'
+      ) {
+        const restored: Order = {
+          ...fallbackOrder,
+          codeCopiedAt: fallbackOrder.codeCopiedAt || now,
+          updatedAt: now,
+        };
+        orders.unshift(restored);
+        await writeOrders(orders);
+        return restored;
+      }
+      return null;
+    }
+
     const current = orders[idx];
     if (
       verificationCode &&
@@ -249,7 +337,6 @@ export async function markOrderCodeCopied(
     ) {
       return null;
     }
-    const now = new Date().toISOString();
     const updated: Order = {
       ...current,
       codeCopiedAt: current.codeCopiedAt || now,
@@ -258,6 +345,53 @@ export async function markOrderCodeCopied(
     orders[idx] = updated;
     await writeOrders(orders);
     return updated;
+  });
+}
+
+export async function upsertManualOrdersBatch(ordersToRestore: Order[]): Promise<Order[]> {
+  return enqueueWrite(async () => {
+    const orders = await readOrders();
+    const byNumber = new Map<string, Order>();
+    for (const ord of orders) {
+      byNumber.set(ord.orderNumber.toUpperCase(), ord);
+    }
+
+    let changed = false;
+    const now = new Date().toISOString();
+    for (const candidate of ordersToRestore) {
+      if (
+        !candidate ||
+        typeof candidate.orderNumber !== 'string' ||
+        !candidate.orderNumber.trim() ||
+        candidate.paymentMethod !== 'opay'
+      ) {
+        continue;
+      }
+      const key = candidate.orderNumber.trim().toUpperCase();
+      const existing = byNumber.get(key);
+      if (!existing) {
+        byNumber.set(key, {
+          ...candidate,
+          codeCopiedAt: candidate.codeCopiedAt || now,
+        });
+        changed = true;
+      } else if (!existing.codeCopiedAt && candidate.codeCopiedAt) {
+        byNumber.set(key, {
+          ...existing,
+          codeCopiedAt: candidate.codeCopiedAt,
+          updatedAt: now,
+        });
+        changed = true;
+      }
+    }
+
+    const merged = Array.from(byNumber.values()).sort(
+      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+    );
+    if (changed) {
+      await writeOrders(merged);
+    }
+    return merged;
   });
 }
 
